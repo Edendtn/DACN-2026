@@ -1,11 +1,12 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Filter, MapPin, Building2, TrendingUp, Anchor, Plane, Navigation, Star, ArrowRight, ArrowLeft, Droplets, Search, Factory, Building, Hotel, GraduationCap, Briefcase, HardHat, Loader2 } from 'lucide-react';
+import { Filter, MapPin, Building2, TrendingUp, Anchor, Plane, Navigation, Star, ArrowRight, ArrowLeft, Droplets, Search, Factory, Building, Hotel, GraduationCap, Briefcase, HardHat, Loader2, Sparkles } from 'lucide-react';
 import { MOCK_PROJECTS } from '../data';
 import { Project } from '../types';
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
 import { fetchProjectsFromSheet, SheetProject } from '../services/sheetService';
+import { fetchAiProjectData } from '../services/aiService';
 
 const CATEGORY_ICONS: Record<string, any> = {
   FACTORY: Factory,
@@ -15,9 +16,26 @@ const CATEGORY_ICONS: Record<string, any> = {
   SCHOOL: GraduationCap,
 };
 
-import { db } from '../firebase';
+import { db, auth } from '../firebase';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
+
+const VIETNAM_PROVINCES = [
+  'All', 'An Giang', 'Bà Rịa – Vũng Tàu', 'Bắc Giang', 'Bắc Kạn', 'Bạc Liêu', 'Bắc Ninh', 'Bến Tre', 'Bình Định', 'Bình Dương', 'Bình Phước', 'Bình Thuận', 'Cà Mau', 'Cần Thơ', 'Cao Bằng', 'Đà Nẵng', 'Đắk Lắk', 'Đắk Nông', 'Điện Biên', 'Đồng Nai', 'Đồng Tháp', 'Gia Lai', 'Hà Giang', 'Hà Nam', 'Hà Nội', 'Hà Tĩnh', 'Hải Dương', 'Hải Phòng', 'Hậu Giang', 'Hòa Bình', 'Hưng Yên', 'Khánh Hòa', 'Kiên Giang', 'Kon Tum', 'Lai Châu', 'Lâm Đồng', 'Lạng Sơn', 'Lào Cai', 'Long An', 'Nam Định', 'Nghệ An', 'Ninh Bình', 'Ninh Thuận', 'Phú Thọ', 'Phú Yên', 'Quảng Bình', 'Quảng Nam', 'Quảng Ngãi', 'Quảng Ninh', 'Quảng Trị', 'Sóc Trăng', 'Sơn La', 'Tây Ninh', 'Thái Bình', 'Thái Nguyên', 'Thanh Hóa', 'Thừa Thiên Huế', 'Tiền Giang', 'TP Hồ Chí Minh', 'Trà Vinh', 'Tuyên Quang', 'Vĩnh Long', 'Vĩnh Phúc', 'Yên Bái'
+];
+
+const STAGES = ['All', 'Khởi công', 'Đang thực hiện', 'Hoàn Thành'];
+
+const SECTORS = [
+  'All',
+  'Hạ tầng kỹ thuật (Infrastructure)',
+  'Nông nghiệp & Phát triển nông thôn',
+  'Công nghiệp (Factory/ Industrial)',
+  'Dân dụng (Building/Residential & Commercial)'
+];
+
+const CAPITAL_TYPES = ['All', 'FDI', 'DDI', 'ODA', 'Hỗn hợp'];
 
 export const HomePage = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -26,6 +44,7 @@ export const HomePage = () => {
   const [isFromFirestore, setIsFromFirestore] = useState(false);
   const [isFromSheet, setIsFromSheet] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [user, setUser] = useState<User | null>(null);
   const itemsPerPage = 20;
 
   const [filters, setFilters] = useState({
@@ -34,6 +53,15 @@ export const HomePage = () => {
     sector: 'All',
     capitalType: 'All',
   });
+
+  useEffect(() => {
+    const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribeAuth();
+  }, []);
+
+  const isAdmin = user?.email === "doantrungnghiavt@gmail.com";
 
   useEffect(() => {
     setLoading(true);
@@ -46,10 +74,33 @@ export const HomePage = () => {
           id: doc.id,
           ...doc.data()
         })) as Project[];
-        setProjects(firestoreProjects);
-        setIsFromFirestore(true);
-        setIsFromSheet(false);
-        setLoading(false);
+        
+        // Also fetch project_real to merge AI data
+        const qReal = query(collection(db, 'project_real'));
+        onSnapshot(qReal, (realSnapshot) => {
+          const realData = realSnapshot.docs.reduce((acc, doc) => {
+            acc[doc.id] = doc.data();
+            return acc;
+          }, {} as Record<string, any>);
+
+          const mergedProjects = firestoreProjects.map(p => {
+            const real = realData[p.id];
+            if (!real) return p;
+            return {
+              ...real,
+              // Force reference fields from 'projects' collection
+              name: p.name,
+              investmentCapital: p.investmentCapital,
+              capitalType: p.capitalType,
+              id: p.id
+            };
+          });
+
+          setProjects(mergedProjects);
+          setIsFromFirestore(true);
+          setIsFromSheet(false);
+          setLoading(false);
+        });
       } else {
         // Fallback to Google Sheet if Firestore is empty
         loadFromSheet();
@@ -73,8 +124,8 @@ export const HomePage = () => {
             scale: sp.scale,
             startDate: '',
             completionDate: sp.completionDate,
-            stage: (sp.stage as any) || 'Construction',
-            sector: (sp.sector as any) || 'Industrial',
+            stage: (sp.stage as any) || 'Đang thực hiện',
+            sector: (sp.sector as any) || 'Đang cập nhật...',
             investor: {
               name: sp.investor,
               address: sp.investorAddress,
@@ -86,7 +137,7 @@ export const HomePage = () => {
               representative: sp.mainContractorRepresentative
             },
             capitalType: sp.capitalType,
-            investmentType: sp.category,
+            investmentType: (sp.stage as any) || 'Đang thực hiện', // -> "Tình trạng hiện tại"
             distanceToPort: parseFloat(sp.distanceToPort) || 0,
             distanceToAirport: parseFloat(sp.distanceToAirport) || 0,
             distanceToHighway: parseFloat(sp.distanceToHighway) || 0,
@@ -94,9 +145,25 @@ export const HomePage = () => {
             category: sp.category,
             description: sp.description,
           }));
-          setProjects(mappedProjects);
-          setIsFromSheet(true);
-          setIsFromFirestore(false);
+
+          // Also fetch project_real to merge AI data for sheet projects
+          const qReal = query(collection(db, 'project_real'));
+          onSnapshot(qReal, (realSnapshot) => {
+            const realData = realSnapshot.docs.reduce((acc, doc) => {
+              acc[doc.id] = doc.data();
+              return acc;
+            }, {} as Record<string, any>);
+
+            const mergedProjects = mappedProjects.map(p => ({
+              ...p,
+              ...(realData[p.id] || {})
+            }));
+
+            setProjects(mergedProjects);
+            setIsFromSheet(true);
+            setIsFromFirestore(false);
+            setLoading(false);
+          });
         } else {
           setProjects(MOCK_PROJECTS);
         }
@@ -111,18 +178,35 @@ export const HomePage = () => {
     return () => unsubscribe();
   }, []);
 
-  const provinces = useMemo(() => ['All', ...new Set(projects.map(p => p.province).filter(Boolean))], [projects]);
-  const stages = useMemo(() => ['All', ...new Set(projects.map(p => p.stage).filter(Boolean))], [projects]);
-  const sectors = useMemo(() => ['All', ...new Set(projects.map(p => p.sector).filter(Boolean))], [projects]);
-  const capitalTypes = ['All', 'FDI', 'DDI'];
+  const provinces = VIETNAM_PROVINCES;
+  const stages = STAGES;
+  const sectors = SECTORS;
+  const capitalTypes = CAPITAL_TYPES;
+
+  const [aiUpdatingId, setAiUpdatingId] = useState<string | null>(null);
+
+  const handleAiUpdate = async (e: React.MouseEvent, project: Project) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!user || aiUpdatingId) return;
+
+    setAiUpdatingId(project.id);
+    try {
+      await fetchAiProjectData(project.name, project);
+    } catch (error) {
+      console.error("AI Update Error:", error);
+    } finally {
+      setAiUpdatingId(null);
+    }
+  };
 
   const filteredProjects = useMemo(() => {
     const filtered = projects.filter(project => {
       const matchesSearch = project.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                            project.investor.name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesProvince = filters.province === 'All' || project.province === filters.province;
-      const matchesStage = filters.stage === 'All' || project.stage === filters.stage;
-      const matchesSector = filters.sector === 'All' || project.sector === filters.sector;
+      const matchesStage = filters.stage === 'All' || project.investmentType === filters.stage;
+      const matchesSector = filters.sector === 'All' || project.constructionType === filters.sector;
       const matchesCapital = filters.capitalType === 'All' || project.capitalType.includes(filters.capitalType);
       
       return matchesSearch && matchesProvince && matchesStage && matchesSector && matchesCapital;
@@ -214,7 +298,7 @@ export const HomePage = () => {
 
               <div className="space-y-8">
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Trạng thái thầu</label>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Tình trạng hiện tại</label>
                   <div className="space-y-2">
                     {stages.map(stage => (
                       <button
@@ -234,7 +318,7 @@ export const HomePage = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Ngành dọc (Sectors)</label>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Loại hình</label>
                   <div className="space-y-2">
                     {sectors.map(sector => (
                       <button
@@ -266,13 +350,13 @@ export const HomePage = () => {
 
                 <div>
                   <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-4">Loại hình vốn</label>
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap lg:flex-nowrap gap-1.5">
                     {capitalTypes.map(type => (
                       <button
                         key={type}
                         onClick={() => setFilters(f => ({ ...f, capitalType: type }))}
                         className={cn(
-                          "flex-1 px-4 py-2.5 rounded-xl text-[10px] font-bold transition-all border uppercase tracking-widest",
+                          "flex-1 px-2 py-2 rounded-xl text-[9px] font-bold transition-all border uppercase tracking-tighter text-center whitespace-nowrap",
                           filters.capitalType === type 
                             ? "bg-red-500 text-white border-red-500" 
                             : "bg-white text-slate-600 border-slate-100 hover:border-slate-300"
@@ -297,22 +381,7 @@ export const HomePage = () => {
                   {isFromSheet && <span className="ml-2 text-xs font-normal bg-green-100 text-green-800 px-3 py-1 rounded-full align-middle">Dữ liệu từ Sheet</span>}
                 </h2>
                 <p className="text-slate-500 font-medium mt-1">Tìm thấy {filteredProjects.length} dự án phù hợp</p>
-                {!isFromSheet && !loading && (
-                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between">
-                    <p className="text-amber-800 text-xs font-bold uppercase tracking-widest">
-                      ⚠️ Đang hiển thị dữ liệu mẫu. Không thể kết nối với Google Sheet.
-                    </p>
-                    <button 
-                      onClick={() => {
-                        localStorage.removeItem('sheet_projects_cache');
-                        window.location.reload();
-                      }}
-                      className="text-amber-900 text-[10px] font-black uppercase tracking-widest hover:underline"
-                    >
-                      Thử tải lại
-                    </button>
-                  </div>
-                )}
+                {/* Removed Google Sheet error message as requested */}
               </div>
               <div className="flex gap-2">
                 <button 
@@ -376,33 +445,50 @@ export const HomePage = () => {
                                       {project.province}
                                     </span>
                                     <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider">
-                                      {project.stage}
+                                      {project.investmentType || project.stage}
                                     </span>
                                   </div>
                                 </div>
                                 <h3 className="text-base font-bold text-slate-900 leading-tight group-hover:text-red-600 transition-colors font-headline truncate">
                                   {project.name}
                                 </h3>
-                                <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-medium mt-1">
-                                  <MapPin className="w-3 h-3 text-red-500" />
-                                  <span className="truncate">{project.location}</span>
+                                <div className="flex items-center justify-between mt-1">
+                                  <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-medium min-w-0">
+                                    <MapPin className="w-3 h-3 text-red-500 shrink-0" />
+                                    <span className="truncate">{project.location}</span>
+                                  </div>
+                                  {isAdmin && (
+                                    <button
+                                      onClick={(e) => handleAiUpdate(e, project)}
+                                      disabled={aiUpdatingId === project.id}
+                                      className={cn(
+                                        "p-1 rounded-md hover:bg-red-50 transition-colors shrink-0 ml-2",
+                                        aiUpdatingId === project.id ? "animate-pulse text-red-400" : "text-slate-300 hover:text-red-600"
+                                      )}
+                                      title="AI Auto-fill & Verify Address"
+                                    >
+                                      {aiUpdatingId === project.id ? (
+                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                      ) : (
+                                        <Sparkles className="w-3 h-3" />
+                                      )}
+                                    </button>
+                                  )}
                                 </div>
                               </div>
                             </div>
 
                             {/* Middle: Key Stats (More compact) */}
-                            <div className="grid grid-cols-3 gap-4 md:gap-8 shrink-0 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-8">
+                            <div className="grid grid-cols-2 gap-4 md:gap-8 shrink-0 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-8">
                               <div className="text-center md:text-left">
                                 <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Vốn đầu tư</p>
                                 <p className="text-xs font-extrabold text-red-600 font-mono">${project.investmentCapital}M</p>
                               </div>
                               <div className="text-center md:text-left">
-                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Quy mô</p>
-                                <p className="text-xs font-extrabold text-slate-700 font-mono">{project.scale}</p>
-                              </div>
-                              <div className="text-center md:text-left">
-                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Hoàn thành</p>
-                                <p className="text-xs font-extrabold text-slate-700 font-mono">{project.completionDate}</p>
+                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Loại hình</p>
+                                <p className="text-[10px] font-extrabold text-slate-700 leading-tight line-clamp-2 max-w-[150px]">
+                                  {project.constructionType}
+                                </p>
                               </div>
                             </div>
 

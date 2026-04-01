@@ -1,7 +1,8 @@
 import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
 
-const MAX_RETRIES = 3;
-const INITIAL_DELAY = 1000; // 1 second
+const MAX_RETRIES = 5;
+const INITIAL_DELAY = 2000; // 2 seconds
+const MAX_DELAY = 30000; // 30 seconds max delay
 
 export async function generateContentWithRetry(
   params: GenerateContentParameters,
@@ -18,12 +19,15 @@ export async function generateContentWithRetry(
       lastError = error;
       
       // Check if it's a rate limit error (429)
+      const errorStr = JSON.stringify(error);
       const isRateLimit = error?.message?.includes('429') || 
                           error?.status === 'RESOURCE_EXHAUSTED' ||
-                          JSON.stringify(error).includes('429');
+                          errorStr.includes('429') ||
+                          errorStr.includes('RESOURCE_EXHAUSTED') ||
+                          errorStr.includes('quota');
       
       if (isRateLimit && attempt < MAX_RETRIES) {
-        const delay = INITIAL_DELAY * Math.pow(2, attempt);
+        const delay = Math.min(INITIAL_DELAY * Math.pow(2, attempt), MAX_DELAY);
         console.warn(`Gemini API rate limit hit. Retrying in ${delay}ms... (Attempt ${attempt + 1}/${MAX_RETRIES})`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;

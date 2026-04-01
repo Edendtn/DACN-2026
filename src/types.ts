@@ -12,12 +12,12 @@ export interface Project {
   location: string;
   province: string;
   investmentCapital: string;
-  constructionType: string;
+  constructionType: string; // -> "Loại hình" (4 categories)
   scale: string;
   startDate: string;
   completionDate: string;
   stage: 'Concept' | 'Design & Documentation' | 'Pre-construction' | 'Construction';
-  sector: 'Utilities' | 'Industrial' | 'Energy' | 'Infrastructure' | 'Building' | 'Resort';
+  sector: string; // -> "Lĩnh vực" (summary < 100 words)
   subSector?: string;
   investor: PartyInfo & { projectRepresentative?: string };
   generalContractor?: PartyInfo;
@@ -34,10 +34,13 @@ export interface Project {
     preliminaryDrawings: string;
   };
   capitalType: string;
-  investmentType: string;
+  investmentType: string; // -> "Tình trạng hiện tại" (3 statuses)
   distanceToPort?: number;
+  portName?: string;
   distanceToAirport?: number;
+  airportName?: string;
   distanceToHighway?: number;
+  highwayName?: string;
   image: string;
   category: string;
   description: string;

@@ -22,6 +22,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { GoogleGenAI, Type } from "@google/genai";
 import { generateContentWithRetry } from '../lib/gemini';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
+import { fetchAiProjectData } from '../services/aiService';
 
 export const ProjectDetailPage = () => {
   const { id } = useParams();
@@ -126,134 +127,9 @@ export const ProjectDetailPage = () => {
 
   const fetchAiParties = async (projectName: string, currentProject: Project) => {
     try {
-      const response = await generateContentWithRetry({
-        model: "gemini-3-flash-preview",
-        contents: `Tìm kiếm thông tin các đơn vị thực hiện cho dự án: "${projectName}". 
-        Yêu cầu thông tin bao gồm:
-        1. Chủ đầu tư: Tên công ty, Địa chỉ trụ sở, Người đại diện pháp luật.
-        2. Các đơn vị tham gia (nếu có): 
-           - Tổng thầu (General Contractor)
-           - Nhà thầu xây dựng (Civil Contractor)
-           - Nhà thầu kết cấu thép (Steel Structure Contractor)
-           - Nhà thầu cơ điện (MEP Contractor)
-           - Tư vấn giám sát (Supervision Consultant)
-           - Quản lý dự án (Project Management)
-        
-        QUAN TRỌNG: 
-        - Chỉ điền thông tin nếu bạn tìm thấy tên chính xác hoặc có thể kiểm chứng trên website/nguồn tin cậy rằng họ thực sự tham gia dự án này.
-        - Nếu không tìm thấy thông tin chắc chắn, hãy để trống hoặc ghi "Đang cập nhật".
-        - TUYỆT ĐỐI KHÔNG điền bừa hoặc đoán thông tin nếu không chắc chắn.
-        - Trả về kết quả dưới dạng JSON.`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              investor: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  address: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              generalContractor: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              civilContractor: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              steelStructureContractor: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              mepContractor: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              supervisionConsultant: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              },
-              projectManagement: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  representative: { type: Type.STRING }
-                }
-              }
-            }
-          }
-        }
-      }, process.env.GEMINI_API_KEY!);
-
-      const aiResult = JSON.parse(response.text);
-      
-      const updatedProject: Project = {
-        ...currentProject,
-        investor: {
-          ...currentProject.investor,
-          name: aiResult.investor?.name || currentProject.investor.name,
-          address: aiResult.investor?.address || currentProject.investor.address,
-          representative: aiResult.investor?.representative || currentProject.investor.representative,
-        },
-        generalContractor: aiResult.generalContractor?.name ? {
-          name: aiResult.generalContractor.name,
-          representative: aiResult.generalContractor.representative,
-          fieldOfActivity: 'Tổng thầu'
-        } : currentProject.generalContractor,
-        civilContractor: aiResult.civilContractor?.name ? {
-          name: aiResult.civilContractor.name,
-          representative: aiResult.civilContractor.representative,
-          fieldOfActivity: 'Nhà thầu xây dựng'
-        } : currentProject.civilContractor,
-        steelStructureContractor: aiResult.steelStructureContractor?.name ? {
-          name: aiResult.steelStructureContractor.name,
-          representative: aiResult.steelStructureContractor.representative,
-          fieldOfActivity: 'Kết cấu thép'
-        } : currentProject.steelStructureContractor,
-        mepContractor: aiResult.mepContractor?.name ? {
-          name: aiResult.mepContractor.name,
-          representative: aiResult.mepContractor.representative,
-          fieldOfActivity: 'Cơ điện (MEP)'
-        } : currentProject.mepContractor,
-        supervisionConsultant: aiResult.supervisionConsultant?.name ? {
-          name: aiResult.supervisionConsultant.name,
-          representative: aiResult.supervisionConsultant.representative,
-          fieldOfActivity: 'Tư vấn giám sát'
-        } : currentProject.supervisionConsultant,
-        projectManagement: aiResult.projectManagement?.name ? {
-          name: aiResult.projectManagement.name,
-          representative: aiResult.projectManagement.representative,
-          fieldOfActivity: 'Quản lý dự án'
-        } : currentProject.projectManagement,
-        lastAiUpdate: new Date().toISOString()
-      };
-
-      // Cache to project_real
-      try {
-        await setDoc(doc(db, 'project_real', currentProject.id), updatedProject, { merge: true });
-        setIsReal(true);
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, `project_real/${currentProject.id}`);
-      }
+      const updatedProject = await fetchAiProjectData(projectName, currentProject);
+      setProject(updatedProject);
+      setIsReal(true);
       return updatedProject;
     } catch (error) {
       console.error('Error fetching AI parties:', error);
@@ -288,58 +164,60 @@ export const ProjectDetailPage = () => {
       if (!id) return;
       setLoading(true);
       try {
-        // 1. Try project_real first (The verified source)
+        // Fetch both project_real (verified) and projects (reference)
         const realRef = doc(db, 'project_real', id);
-        let realSnap;
-        try {
-          realSnap = await getDoc(realRef);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `project_real/${id}`);
-        }
-
-        if (realSnap?.exists()) {
-          const data = { id: realSnap.id, ...realSnap.data() } as Project;
-          setProject(data);
-          setIsReal(true);
-          setIsFromFirestore(true);
-          setLoading(false);
-          return;
-        }
-
-        // 2. Try projects (The draft/cache source)
         const docRef = doc(db, 'projects', id);
-        let docSnap;
-        try {
-          docSnap = await getDoc(docRef);
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `projects/${id}`);
-          return;
-        }
         
+        const [realSnap, docSnap] = await Promise.all([
+          getDoc(realRef).catch(e => {
+            handleFirestoreError(e, OperationType.GET, `project_real/${id}`);
+            return null;
+          }),
+          getDoc(docRef).catch(e => {
+            handleFirestoreError(e, OperationType.GET, `projects/${id}`);
+            return null;
+          })
+        ]);
+
         let currentProject: Project | undefined;
 
-        if (docSnap.exists()) {
-          currentProject = { id: docSnap.id, ...docSnap.data() } as Project;
-          setIsReal(false);
+        if (docSnap?.exists()) {
+          const projectData = { id: docSnap.id, ...docSnap.data() } as Project;
+          setIsFromFirestore(true);
           
-          // Check if AI update is needed (1 month = 30 days)
-          const lastUpdate = currentProject.lastAiUpdate ? new Date(currentProject.lastAiUpdate) : null;
-          const oneMonthAgo = new Date();
-          oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
+          if (realSnap?.exists()) {
+            const realData = realSnap.data() as Project;
+            currentProject = {
+              ...realData,
+              // Force reference fields from 'projects' collection
+              name: projectData.name,
+              investmentCapital: projectData.investmentCapital,
+              capitalType: projectData.capitalType,
+              id: projectData.id
+            };
+            setIsReal(true);
+          } else {
+            currentProject = projectData;
+            setIsReal(false);
+            
+            // Check if AI update is needed (1 month = 30 days)
+            const lastUpdate = currentProject.lastAiUpdate ? new Date(currentProject.lastAiUpdate) : null;
+            const oneMonthAgo = new Date();
+            oneMonthAgo.setDate(oneMonthAgo.getDate() - 30);
 
-          if (!lastUpdate || lastUpdate < oneMonthAgo) {
-            setUpdatingAi(true);
-            currentProject = await fetchAiParties(currentProject.name, currentProject);
-            setUpdatingAi(false);
+            if (!lastUpdate || lastUpdate < oneMonthAgo) {
+              setUpdatingAi(true);
+              currentProject = await fetchAiParties(currentProject.name, currentProject);
+              setUpdatingAi(false);
+            }
           }
           
           setProject(currentProject);
-          setIsFromFirestore(true);
           setLoading(false);
           return;
         }
 
-        // Fallback to Google Sheet
+        // Fallback to Google Sheet if not in projects collection
         const sheetData = await fetchProjectsFromSheet();
         const found = sheetData.find(sp => sp.id === id);
         
@@ -354,8 +232,8 @@ export const ProjectDetailPage = () => {
             scale: found.scale,
             startDate: '',
             completionDate: found.completionDate,
-            stage: (found.stage as any) || 'Construction',
-            sector: (found.sector as any) || 'Industrial',
+            stage: (found.stage as any) || 'Đang thực hiện',
+            sector: (found.sector as any) || 'Đang cập nhật...',
             subSector: found.subSector,
             investor: {
               name: found.investor,
@@ -412,7 +290,7 @@ export const ProjectDetailPage = () => {
               preliminaryDrawings: (found as any).preliminaryDrawings || 'Bản vẽ sơ bộ'
             },
             capitalType: found.capitalType,
-            investmentType: found.category,
+            investmentType: (found.stage as any) || 'Đang thực hiện', // -> "Tình trạng hiện tại"
             distanceToPort: parseFloat(found.distanceToPort) || 0,
             distanceToAirport: parseFloat(found.distanceToAirport) || 0,
             distanceToHighway: parseFloat(found.distanceToHighway) || 0,
@@ -421,12 +299,27 @@ export const ProjectDetailPage = () => {
             description: found.description,
           };
 
-          setIsReal(false);
-          // Auto AI update for new projects from sheet
-          setUpdatingAi(true);
-          const aiUpdated = await fetchAiParties(mapped.name, mapped);
-          setProject(aiUpdated);
-          setUpdatingAi(false);
+          // Check if real data exists for this sheet project
+          if (realSnap?.exists()) {
+            const realData = realSnap.data() as Project;
+            currentProject = {
+              ...realData,
+              // Force reference fields from sheet data
+              name: mapped.name,
+              investmentCapital: mapped.investmentCapital,
+              capitalType: mapped.capitalType,
+              id: mapped.id
+            };
+            setIsReal(true);
+          } else {
+            setIsReal(false);
+            // Auto AI update for new projects from sheet
+            setUpdatingAi(true);
+            currentProject = await fetchAiParties(mapped.name, mapped);
+            setUpdatingAi(false);
+          }
+          
+          setProject(currentProject);
         } else {
           const mockProject = MOCK_PROJECTS.find(p => p.id === id);
           setProject(mockProject);
@@ -639,7 +532,7 @@ export const ProjectDetailPage = () => {
                     onChange={(e) => setEditedProject(prev => prev ? {...prev, location: e.target.value} : null)}
                   />
                 ) : (
-                  <span className="text-sm">{project.location}</span>
+                  <span className="text-sm">{aiData?.exactLocation || project.location}</span>
                 )}
               </div>
 
@@ -675,7 +568,12 @@ export const ProjectDetailPage = () => {
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quy mô diện tích</p>
-                  <p className="text-lg font-extrabold text-red-600 font-mono">{aiData?.scale || project.scale || '---'}</p>
+                  <p className={cn(
+                    "font-extrabold text-red-600 font-mono leading-tight",
+                    (aiData?.scale || project.scale || '').length > 20 ? "text-sm" : "text-lg"
+                  )}>
+                    {aiData?.scale || project.scale || '---'}
+                  </p>
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Ngày khởi công</p>
@@ -796,8 +694,8 @@ export const ProjectDetailPage = () => {
                             <div className="flex items-start gap-3">
                               <div className="bg-slate-50 p-1.5 rounded-lg"><Info className="w-3.5 h-3.5 text-slate-400" /></div>
                               <div>
-                                <h4 className="font-bold text-slate-900 text-xs mb-0.5">Loại hình xây dựng</h4>
-                                <p className="text-slate-500 text-[11px]">{project.constructionType}</p>
+                                <h4 className="font-bold text-slate-900 text-xs mb-0.5">Loại hình</h4>
+                                <p className="text-slate-500 text-[11px]">{aiData?.constructionType || project.constructionType}</p>
                               </div>
                             </div>
                             <div className="flex items-start gap-3">
@@ -811,14 +709,14 @@ export const ProjectDetailPage = () => {
                               <div className="bg-slate-50 p-1.5 rounded-lg"><Building2 className="w-3.5 h-3.5 text-slate-400" /></div>
                               <div>
                                 <h4 className="font-bold text-slate-900 text-xs mb-0.5">Lĩnh vực</h4>
-                                <p className="text-slate-500 text-[11px]">{project.sector} {project.subSector && `- ${project.subSector}`}</p>
+                                <p className="text-slate-500 text-[11px]">{aiData?.sector || project.sector} {project.subSector && `- ${project.subSector}`}</p>
                               </div>
                             </div>
                             <div className="flex items-start gap-3">
                               <div className="bg-slate-50 p-1.5 rounded-lg"><DollarSign className="w-3.5 h-3.5 text-slate-400" /></div>
                               <div>
-                                <h4 className="font-bold text-slate-900 text-xs mb-0.5">Hình thức đầu tư</h4>
-                                <p className="text-slate-500 text-[11px]">{project.investmentType}</p>
+                                <h4 className="font-bold text-slate-900 text-xs mb-0.5">Tình trạng hiện tại</h4>
+                                <p className="text-slate-500 text-[11px]">{aiData?.currentStatus || project.investmentType}</p>
                               </div>
                             </div>
                           </div>
@@ -828,16 +726,16 @@ export const ProjectDetailPage = () => {
                             </h4>
                             <div className="space-y-3">
                               <div className="flex justify-between items-center">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến Cảng biển</span>
-                                <span className="text-xs font-extrabold text-red-600">{project.distanceToPort} km</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến {aiData?.distances?.portName || project.portName || 'Cảng biển'}</span>
+                                <span className="text-xs font-extrabold text-red-600">{String(aiData?.distances?.port || project.distanceToPort || '---').replace(/km/gi, '').trim()} km</span>
                               </div>
                               <div className="flex justify-between items-center">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến Sân bay</span>
-                                <span className="text-xs font-extrabold text-red-600">{project.distanceToAirport} km</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến {aiData?.distances?.airportName || project.airportName || 'Sân bay'}</span>
+                                <span className="text-xs font-extrabold text-red-600">{String(aiData?.distances?.airport || project.distanceToAirport || '---').replace(/km/gi, '').trim()} km</span>
                               </div>
                               <div className="flex justify-between items-center">
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến Cao tốc</span>
-                                <span className="text-xs font-extrabold text-red-600">{project.distanceToHighway} km</span>
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Đến {aiData?.distances?.highwayName || project.highwayName || 'Cao tốc'}</span>
+                                <span className="text-xs font-extrabold text-red-600">{String(aiData?.distances?.highway || project.distanceToHighway || '---').replace(/km/gi, '').trim()} km</span>
                               </div>
                             </div>
                           </div>
@@ -922,9 +820,10 @@ export const ProjectDetailPage = () => {
                               <div className="space-y-6 pl-11">
                                 {isEditing ? (
                                   <div className="space-y-4">
-                                    {['generalContractor', 'civilContractor', 'steelStructureContractor', 'mepContractor', 'supervisionConsultant', 'projectManagement'].map((key) => {
+                                    {['generalContractor', 'mainContractor', 'civilContractor', 'steelStructureContractor', 'mepContractor', 'supervisionConsultant', 'projectManagement'].map((key) => {
                                       const labels: any = {
                                         generalContractor: 'Tổng thầu',
+                                        mainContractor: 'Tổng thầu (Chính)',
                                         civilContractor: 'Nhà thầu xây dựng',
                                         steelStructureContractor: 'Nhà thầu kết cấu thép',
                                         mepContractor: 'Nhà thầu cơ điện',
@@ -974,6 +873,13 @@ export const ProjectDetailPage = () => {
                                         <p className="text-[9px] font-bold text-red-500 uppercase tracking-widest mb-1">Tổng thầu</p>
                                         <p className="text-slate-900 text-xs font-bold">{project.generalContractor.name}</p>
                                         <p className="text-[10px] text-slate-500 mt-1">Đại diện: {project.generalContractor.representative || '---'}</p>
+                                      </div>
+                                    )}
+                                    {project.mainContractor?.name && (
+                                      <div>
+                                        <p className="text-[9px] font-bold text-red-500 uppercase tracking-widest mb-1">Tổng thầu (Nhà thầu chính)</p>
+                                        <p className="text-slate-900 text-xs font-bold">{project.mainContractor.name}</p>
+                                        <p className="text-[10px] text-slate-500 mt-1">Đại diện: {project.mainContractor.representative || '---'}</p>
                                       </div>
                                     )}
                                     {project.civilContractor?.name && (

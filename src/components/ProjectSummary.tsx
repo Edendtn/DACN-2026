@@ -15,9 +15,11 @@ interface ProjectSummaryProps {
   cachedSummary?: string;
   cachedSources?: { title: string; uri: string }[];
   onDataExtracted?: (data: {
+    exactLocation?: string;
     startDate?: string;
     completionDate?: string;
     constructionType?: string;
+    currentStatus?: string;
     sector?: string;
     distances?: { port?: string; airport?: string; highway?: string };
   }) => void;
@@ -44,20 +46,27 @@ export const ProjectSummary: React.FC<ProjectSummaryProps> = ({
     try {
       const response = await generateContentWithRetry({
         model: "gemini-3-flash-preview",
-        contents: `Tìm kiếm thông tin chi tiết về dự án "${projectName}" tại ${location}. 
+        contents: `Tìm kiếm và phân tích thông tin chi tiết về dự án "${projectName}" tại ${location}. 
         YÊU CẦU:
-        1. Viết một đoạn tóm tắt ngắn gọn (dưới 2000 ký tự) về các thông tin quan trọng nhất (chủ đầu tư, quy mô, tiến độ, ý nghĩa kinh tế). KHÔNG bao gồm bất kỳ tiêu đề nào như "Tóm tắt" hay "Thông tin trích xuất".
+        1. Viết một đoạn tóm tắt ngắn gọn (dưới 2000 ký tự) về các thông tin quan trọng nhất (chủ đầu tư, quy mô, tiến độ, ý nghĩa kinh tế). 
+           Lưu ý: Nếu dự án có LIÊN DANH TỔNG THẦU, hãy nêu rõ tên các đơn vị.
+           KHÔNG bao gồm bất kỳ tiêu đề nào như "Tóm tắt" hay "Thông tin trích xuất".
         2. Trích xuất các thông tin sau dưới dạng JSON và đặt DUY NHẤT ở cuối câu trả lời, nằm giữa thẻ <data></data>:
         {
+          "exactLocation": "Địa chỉ cụ thể chính xác của dự án (Số nhà, tên đường, phường/xã, quận/huyện, tỉnh/thành phố)",
           "startDate": "tháng/năm hoặc Quý/năm",
           "completionDate": "tháng/năm hoặc Quý/năm",
-          "constructionType": "loại hình cụ thể",
-          "sector": "lĩnh vực cụ thể",
-          "scale": "quy mô diện tích",
+          "constructionType": "Phân loại vào 1 trong 4 nhóm: 'Hạ tầng kỹ thuật (Infrastructure)', 'Nông nghiệp & Phát triển nông thôn', 'Công nghiệp (Factory/ Industrial)', 'Dân dụng (Building/Residential & Commercial)'",
+          "currentStatus": "Dựa trên phân tích tiến độ so với năm hiện tại (2026), phân loại vào 1 trong 3 nhóm: 'Khởi công', 'Đang thực hiện', 'Hoàn Thành'",
+          "sector": "Viết một đoạn tóm tắt ngắn gọn (< 100 từ) về sản phẩm hoặc hoạt động sản xuất/kinh doanh của dự án",
+          "scale": "quy mô diện tích (ví dụ: 10 ha, 5 tòa nhà, 2000 căn hộ, công suất 500MW...)",
           "distances": {
-            "port": "số km",
-            "airport": "số km",
-            "highway": "số km"
+            "port": "số km (chỉ ghi số)",
+            "portName": "tên cảng biển",
+            "airport": "số km (chỉ ghi số)",
+            "airportName": "tên sân bay",
+            "highway": "số km (chỉ ghi số)",
+            "highwayName": "tên đường cao tốc"
           }
         }`,
         config: {
@@ -108,7 +117,12 @@ export const ProjectSummary: React.FC<ProjectSummaryProps> = ({
       }
     } catch (err: any) {
       console.error("AI Summary Error:", err);
-      setError("Không thể tải thông tin. Vui lòng thử lại sau.");
+      const errorStr = JSON.stringify(err);
+      if (errorStr.includes('429') || errorStr.includes('RESOURCE_EXHAUSTED') || errorStr.includes('quota')) {
+        setError("Hệ thống AI đang bận (quá tải hạn mức). Vui lòng đợi 1-2 phút và thử lại.");
+      } else {
+        setError("Không thể tải thông tin. Vui lòng thử lại sau.");
+      }
     } finally {
       setLoading(false);
     }
@@ -128,7 +142,7 @@ export const ProjectSummary: React.FC<ProjectSummaryProps> = ({
       <div className="p-4 border-b border-slate-50 flex items-center justify-between bg-slate-50/50">
         <div className="flex items-center gap-2">
           <div className="bg-red-100 p-1.5 rounded-lg text-red-600">
-            <Globe className="w-3.5 h-3.5" />
+            <Search className="w-3.5 h-3.5" />
           </div>
           <h3 className="font-bold text-slate-900 text-[11px] uppercase tracking-widest">Cập nhật thông tin mới nhất của dự án hiện tại</h3>
         </div>
@@ -181,12 +195,12 @@ export const ProjectSummary: React.FC<ProjectSummaryProps> = ({
           </div>
         ) : (
           <div className="text-center py-8">
-            <p className="text-slate-500 text-sm font-medium mb-4">Nhấn nút bên dưới để tự động tìm kiếm và tóm tắt thông tin về dự án này từ internet.</p>
+            <p className="text-slate-500 text-sm font-medium mb-4">Nhấn nút bên dưới để cập nhật thông tin chi tiết về dự án này.</p>
             <button 
               onClick={generateSummary}
               className="bg-red-600 text-white px-8 py-3 rounded-2xl text-xs font-bold uppercase tracking-widest shadow-lg shadow-red-900/20 hover:bg-red-700 transition-all"
             >
-              Bắt đầu tìm kiếm
+              Cập nhật thông tin
             </button>
           </div>
         )}
