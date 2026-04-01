@@ -1,0 +1,137 @@
+{
+  "entities": {
+    "projects": {
+      "title": "Project",
+      "description": "Industrial and construction project information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "investor": { "type": "string" },
+        "investorAddress": { "type": "string" },
+        "investorRepresentative": { "type": "string" },
+        "location": { "type": "string" },
+        "province": { "type": "string" },
+        "investmentCapital": { "type": "string" },
+        "scale": { "type": "string" },
+        "stage": { "type": "string" },
+        "sector": { "type": "string" },
+        "subSector": { "type": "string" },
+        "capitalType": { "type": "string" },
+        "completionDate": { "type": "string" },
+        "image": { "type": "string" },
+        "category": { "type": "string" },
+        "distanceToPort": { "type": "string" },
+        "distanceToAirport": { "type": "string" },
+        "distanceToHighway": { "type": "string" },
+        "description": { "type": "string" },
+        "mainContractor": { "type": "string" },
+        "mainContractorAddress": { "type": "string" },
+        "mainContractorRepresentative": { "type": "string" },
+        "designConsultant": { "type": "string" },
+        "designConsultantAddress": { "type": "string" },
+        "designConsultantRepresentative": { "type": "string" },
+        "steelStructureContractor": { "type": "string" },
+        "steelStructureContractorRepresentative": { "type": "string" },
+        "mepContractor": { "type": "string" },
+        "mepContractorRepresentative": { "type": "string" },
+        "supervisionConsultant": { "type": "string" },
+        "supervisionConsultantRepresentative": { "type": "string" },
+        "projectManagement": { "type": "string" },
+        "projectManagementRepresentative": { "type": "string" },
+        "generalContractor": { "type": "string" },
+        "generalContractorRepresentative": { "type": "string" },
+        "civilContractor": { "type": "string" },
+        "civilContractorRepresentative": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "sector", "province"]
+    },
+    "news": {
+      "title": "News Article",
+      "description": "Economic and investment news updates",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "summary": { "type": "string" },
+        "author": { "type": "string" },
+        "category": { "type": "string", "enum": ["Economic", "Investment", "Policy", "Market"] },
+        "image": { "type": "string" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "source": { "type": "string" }
+      },
+      "required": ["title", "content", "publishedAt"]
+    },
+    "blog": {
+      "title": "Blog Post",
+      "description": "Academic sharing and technical articles",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "author": { "type": "string" },
+        "academicCategory": { "type": "string" },
+        "image": { "type": "string" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["title", "content", "publishedAt"]
+    },
+    "chemicalCompatibility": {
+      "title": "Chemical Compatibility",
+      "description": "Data for checking material compatibility with chemicals",
+      "type": "object",
+      "properties": {
+        "material": { "type": "string" },
+        "chemical": { "type": "string" },
+        "rating": { "type": "string", "enum": ["A - Excellent", "B - Good", "C - Fair", "D - Severe Effect"] },
+        "notes": { "type": "string" }
+      },
+      "required": ["material", "chemical", "rating"]
+    },
+    "leads": {
+      "title": "Lead",
+      "description": "Technical document requests and inquiries",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string" },
+        "projectName": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "company": { "type": "string" },
+        "phone": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "type": { "type": "string" }
+      },
+      "required": ["projectId", "name", "email", "company"]
+    }
+  },
+  "firestore": {
+    "/projects/{projectId}": {
+      "schema": "projects",
+      "description": "Collection of industrial projects (cache/draft)"
+    },
+    "/project_real/{projectId}": {
+      "schema": "projects",
+      "description": "Enriched and verified project data for production"
+    },
+    "/news/{newsId}": {
+      "schema": "news",
+      "description": "Collection of economic and investment news"
+    },
+    "/blog/{blogId}": {
+      "schema": "blog",
+      "description": "Collection of academic and technical blog posts"
+    },
+    "/chemical_compatibility/{id}": {
+      "schema": "chemicalCompatibility",
+      "description": "Reference data for chemical compatibility"
+    },
+    "/leads/{leadId}": {
+      "schema": "leads",
+      "description": "Collection of technical document requests"
+    }
+  }
+}

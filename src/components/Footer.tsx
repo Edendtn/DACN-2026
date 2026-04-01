@@ -8,7 +8,7 @@ export const Footer = () => {
         <div className="space-y-4">
           <Link to="/" className="flex flex-col leading-none group">
             <span className="text-2xl font-black tracking-tighter text-red-600 font-headline">DACN</span>
-            <span className="text-[10px] font-bold tracking-[0.2em] text-slate-600 uppercase">Việt Nam Phát Triển</span>
+            <span className="text-[5px] font-bold tracking-[0.2em] text-slate-600 uppercase">Việt Nam Phát Triển</span>
           </Link>
           <p className="text-slate-500 text-xs leading-relaxed max-w-xs">
             Nền tảng kết nối kỹ thuật và thương mại hàng đầu cho ngành công nghiệp và xử lý nước tại Việt Nam.

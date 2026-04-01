@@ -1,3 +1,11 @@
+export interface PartyInfo {
+  name: string;
+  address?: string;
+  representative?: string;
+  fieldOfActivity?: string;
+  personInCharge?: string;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -11,20 +19,19 @@ export interface Project {
   stage: 'Concept' | 'Design & Documentation' | 'Pre-construction' | 'Construction';
   sector: 'Utilities' | 'Industrial' | 'Energy' | 'Infrastructure' | 'Building' | 'Resort';
   subSector?: string;
-  investor: {
-    name: string;
-    address: string;
-    representative: string;
-  };
-  mainContractor: {
-    name: string;
-    address: string;
-    representative: string;
-  };
-  designConsultant?: {
-    name: string;
-    address: string;
-    representative: string;
+  investor: PartyInfo & { projectRepresentative?: string };
+  generalContractor?: PartyInfo;
+  mainContractor: PartyInfo;
+  designConsultant?: PartyInfo;
+  steelStructureContractor?: PartyInfo;
+  mepContractor?: PartyInfo;
+  supervisionConsultant?: PartyInfo;
+  projectManagement?: PartyInfo;
+  civilContractor?: PartyInfo;
+  waterTreatmentSystem?: PartyInfo;
+  technicalDocuments?: {
+    capabilityProfile: string;
+    preliminaryDrawings: string;
   };
   capitalType: string;
   investmentType: string;
@@ -34,6 +41,9 @@ export interface Project {
   image: string;
   category: string;
   description: string;
+  lastAiUpdate?: string;
+  aiSummary?: string;
+  aiSources?: { title: string; uri: string }[];
 }
 
 export interface Lead {

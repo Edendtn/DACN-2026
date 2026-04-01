@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Filter, MapPin, Building2, TrendingUp, Anchor, Plane, Navigation, Star, ArrowRight, Droplets, Search, Factory, Building, Hotel, GraduationCap, Briefcase, HardHat } from 'lucide-react';
+import { Filter, MapPin, Building2, TrendingUp, Anchor, Plane, Navigation, Star, ArrowRight, ArrowLeft, Droplets, Search, Factory, Building, Hotel, GraduationCap, Briefcase, HardHat, Loader2 } from 'lucide-react';
 import { MOCK_PROJECTS } from '../data';
 import { Project } from '../types';
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
+import { fetchProjectsFromSheet, SheetProject } from '../services/sheetService';
 
 const CATEGORY_ICONS: Record<string, any> = {
   FACTORY: Factory,
@@ -14,8 +15,19 @@ const CATEGORY_ICONS: Record<string, any> = {
   SCHOOL: GraduationCap,
 };
 
+import { db } from '../firebase';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
+
 export const HomePage = () => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isFromFirestore, setIsFromFirestore] = useState(false);
+  const [isFromSheet, setIsFromSheet] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
+
   const [filters, setFilters] = useState({
     province: 'All',
     stage: 'All',
@@ -23,13 +35,89 @@ export const HomePage = () => {
     capitalType: 'All',
   });
 
-  const provinces = useMemo(() => ['All', ...new Set(MOCK_PROJECTS.map(p => p.province))], []);
-  const stages = ['All', 'Concept', 'Design & Documentation', 'Pre-construction', 'Construction'];
-  const sectors = ['All', 'Utilities', 'Industrial', 'Energy', 'Infrastructure', 'Building', 'Resort'];
+  useEffect(() => {
+    setLoading(true);
+    
+    // Try Firestore first
+    const q = query(collection(db, 'projects'), orderBy('name', 'asc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      if (!snapshot.empty) {
+        const firestoreProjects = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Project[];
+        setProjects(firestoreProjects);
+        setIsFromFirestore(true);
+        setIsFromSheet(false);
+        setLoading(false);
+      } else {
+        // Fallback to Google Sheet if Firestore is empty
+        loadFromSheet();
+      }
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'projects');
+      loadFromSheet();
+    });
+
+    const loadFromSheet = async () => {
+      try {
+        const sheetData = await fetchProjectsFromSheet();
+        if (sheetData && sheetData.length > 0) {
+          const mappedProjects: Project[] = sheetData.map(sp => ({
+            id: sp.id,
+            name: sp.name,
+            location: sp.location,
+            province: sp.province,
+            investmentCapital: sp.investmentCapital,
+            constructionType: sp.category,
+            scale: sp.scale,
+            startDate: '',
+            completionDate: sp.completionDate,
+            stage: (sp.stage as any) || 'Construction',
+            sector: (sp.sector as any) || 'Industrial',
+            investor: {
+              name: sp.investor,
+              address: sp.investorAddress,
+              representative: sp.investorRepresentative
+            },
+            mainContractor: {
+              name: sp.mainContractor,
+              address: sp.mainContractorAddress,
+              representative: sp.mainContractorRepresentative
+            },
+            capitalType: sp.capitalType,
+            investmentType: sp.category,
+            distanceToPort: parseFloat(sp.distanceToPort) || 0,
+            distanceToAirport: parseFloat(sp.distanceToAirport) || 0,
+            distanceToHighway: parseFloat(sp.distanceToHighway) || 0,
+            image: sp.image,
+            category: sp.category,
+            description: sp.description,
+          }));
+          setProjects(mappedProjects);
+          setIsFromSheet(true);
+          setIsFromFirestore(false);
+        } else {
+          setProjects(MOCK_PROJECTS);
+        }
+      } catch (err) {
+        console.error("Sheet error:", err);
+        setProjects(MOCK_PROJECTS);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    return () => unsubscribe();
+  }, []);
+
+  const provinces = useMemo(() => ['All', ...new Set(projects.map(p => p.province).filter(Boolean))], [projects]);
+  const stages = useMemo(() => ['All', ...new Set(projects.map(p => p.stage).filter(Boolean))], [projects]);
+  const sectors = useMemo(() => ['All', ...new Set(projects.map(p => p.sector).filter(Boolean))], [projects]);
   const capitalTypes = ['All', 'FDI', 'DDI'];
 
   const filteredProjects = useMemo(() => {
-    return MOCK_PROJECTS.filter(project => {
+    const filtered = projects.filter(project => {
       const matchesSearch = project.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                            project.investor.name.toLowerCase().includes(searchTerm.toLowerCase());
       const matchesProvince = filters.province === 'All' || project.province === filters.province;
@@ -39,6 +127,18 @@ export const HomePage = () => {
       
       return matchesSearch && matchesProvince && matchesStage && matchesSector && matchesCapital;
     });
+    return filtered;
+  }, [searchTerm, filters, projects]);
+
+  const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
+  const paginatedProjects = useMemo(() => {
+    const start = (currentPage - 1) * itemsPerPage;
+    return filteredProjects.slice(start, start + itemsPerPage);
+  }, [filteredProjects, currentPage]);
+
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1);
   }, [searchTerm, filters]);
 
   return (
@@ -191,98 +291,197 @@ export const HomePage = () => {
           <main className="flex-grow">
             <div className="flex justify-between items-end mb-12">
               <div>
-                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight font-headline">Danh sách dự án</h2>
+                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight font-headline">
+                  Danh sách dự án 
+                  {isFromFirestore && <span className="ml-2 text-xs font-normal bg-blue-100 text-blue-800 px-3 py-1 rounded-full align-middle">Dữ liệu Firestore</span>}
+                  {isFromSheet && <span className="ml-2 text-xs font-normal bg-green-100 text-green-800 px-3 py-1 rounded-full align-middle">Dữ liệu từ Sheet</span>}
+                </h2>
                 <p className="text-slate-500 font-medium mt-1">Tìm thấy {filteredProjects.length} dự án phù hợp</p>
+                {!isFromSheet && !loading && (
+                  <div className="mt-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-between">
+                    <p className="text-amber-800 text-xs font-bold uppercase tracking-widest">
+                      ⚠️ Đang hiển thị dữ liệu mẫu. Không thể kết nối với Google Sheet.
+                    </p>
+                    <button 
+                      onClick={() => {
+                        localStorage.removeItem('sheet_projects_cache');
+                        window.location.reload();
+                      }}
+                      className="text-amber-900 text-[10px] font-black uppercase tracking-widest hover:underline"
+                    >
+                      Thử tải lại
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem('sheet_projects_cache');
+                    window.location.reload();
+                  }}
+                  title="Làm mới dữ liệu"
+                  className="p-2 bg-white border border-slate-100 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"
+                >
+                  <Loader2 className={cn("w-4 h-4 text-slate-400", loading && "animate-spin")} />
+                </button>
                 <button className="p-2 bg-white border border-slate-100 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"><Navigation className="w-4 h-4 text-slate-400" /></button>
                 <button className="p-2 bg-white border border-slate-100 rounded-lg shadow-sm hover:bg-slate-50 transition-colors"><Star className="w-4 h-4 text-slate-400" /></button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <AnimatePresence mode="popLayout">
-                {filteredProjects.map((project) => {
-                  const Icon = CATEGORY_ICONS[project.category] || Factory;
-                  return (
-                    <motion.div
-                      layout
-                      key={project.id}
-                      initial={{ opacity: 0, scale: 0.9 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      exit={{ opacity: 0, scale: 0.9 }}
-                      transition={{ duration: 0.2 }}
-                    >
-                      <Link to={`/project/${project.id}`} className="group block bg-white rounded-[2.5rem] overflow-hidden shadow-sm border border-slate-100 hover:shadow-xl hover:-translate-y-1 transition-all duration-300">
-                        <div className="relative h-64 overflow-hidden">
-                          <img 
-                            src={project.image} 
-                            alt={project.name}
-                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute top-6 left-6 flex gap-2">
-                            <span className="bg-white/90 backdrop-blur-md text-red-600 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-sm">
-                              {project.province}
-                            </span>
-                            <span className="bg-red-500 text-white px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-sm">
-                              {project.capitalType.split(' - ')[0]}
-                            </span>
-                            <span className="bg-orange-500 text-white px-4 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest shadow-sm">
-                              {project.stage}
-                            </span>
-                          </div>
-                          <div className="absolute bottom-6 right-6">
-                            <div className="bg-red-600 p-3 rounded-2xl text-white shadow-lg">
-                              <Icon className="w-5 h-5" />
+            <div className="flex flex-col gap-4">
+              {loading ? (
+                <div className="flex flex-col items-center justify-center py-20 bg-white rounded-[2.5rem] border border-slate-100">
+                  <Loader2 className="w-12 h-12 text-red-600 animate-spin mb-4" />
+                  <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Đang tải dữ liệu dự án...</p>
+                </div>
+              ) : paginatedProjects.length > 0 ? (
+                <>
+                  <AnimatePresence mode="popLayout">
+                    {paginatedProjects.map((project) => {
+                    const Icon = CATEGORY_ICONS[project.category] || Factory;
+                    const hasValidImage = project.image && project.image.startsWith('http') && !project.image.includes('picsum.photos/seed');
+                    
+                    return (
+                      <motion.div
+                        layout
+                        key={project.id}
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.98 }}
+                        transition={{ duration: 0.15 }}
+                      >
+                        <Link to={`/project/${project.id}`} className="group block bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-100 hover:shadow-md hover:border-red-200 transition-all duration-200">
+                          <div className="p-4 md:p-5 flex flex-col md:flex-row md:items-center gap-4 md:gap-8">
+                            {/* Left: Thumbnail (Optional) & Title */}
+                            <div className="flex flex-grow min-w-0 items-center gap-4">
+                              {hasValidImage && (
+                                <div className="hidden sm:block w-16 h-16 rounded-xl overflow-hidden shrink-0 border border-slate-100">
+                                  <img 
+                                    src={project.image} 
+                                    alt="" 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-grow">
+                                <div className="flex items-center gap-2 mb-1.5">
+                                  <div className="bg-red-50 p-1.5 rounded-lg text-red-600 group-hover:bg-red-600 group-hover:text-white transition-colors">
+                                    <Icon className="w-3.5 h-3.5" />
+                                  </div>
+                                  <div className="flex gap-1.5">
+                                    <span className="bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider">
+                                      {project.province}
+                                    </span>
+                                    <span className="bg-red-50 text-red-600 px-2 py-0.5 rounded-md text-[8px] font-bold uppercase tracking-wider">
+                                      {project.stage}
+                                    </span>
+                                  </div>
+                                </div>
+                                <h3 className="text-base font-bold text-slate-900 leading-tight group-hover:text-red-600 transition-colors font-headline truncate">
+                                  {project.name}
+                                </h3>
+                                <div className="flex items-center gap-1.5 text-slate-500 text-[10px] font-medium mt-1">
+                                  <MapPin className="w-3 h-3 text-red-500" />
+                                  <span className="truncate">{project.location}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Middle: Key Stats (More compact) */}
+                            <div className="grid grid-cols-3 gap-4 md:gap-8 shrink-0 border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-8">
+                              <div className="text-center md:text-left">
+                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Vốn đầu tư</p>
+                                <p className="text-xs font-extrabold text-red-600 font-mono">${project.investmentCapital}M</p>
+                              </div>
+                              <div className="text-center md:text-left">
+                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Quy mô</p>
+                                <p className="text-xs font-extrabold text-slate-700 font-mono">{project.scale}</p>
+                              </div>
+                              <div className="text-center md:text-left">
+                                <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Hoàn thành</p>
+                                <p className="text-xs font-extrabold text-slate-700 font-mono">{project.completionDate}</p>
+                              </div>
+                            </div>
+
+                            {/* Right: Action */}
+                            <div className="hidden md:flex shrink-0">
+                              <ArrowRight className="w-4 h-4 text-slate-300 group-hover:text-red-600 group-hover:translate-x-1 transition-all" />
                             </div>
                           </div>
-                        </div>
-                        
-                        <div className="p-8">
-                          <div className="flex justify-between items-start mb-4">
-                            <h3 className="text-xl font-bold text-slate-900 leading-tight group-hover:text-red-600 transition-colors font-headline line-clamp-2">
-                              {project.name}
-                            </h3>
-                          </div>
+                        </Link>
+                      </motion.div>
+                    );
+                  })}
+                  </AnimatePresence>
+
+                  {/* Pagination Controls */}
+                  {totalPages > 1 && (
+                    <div className="mt-12 flex items-center justify-center gap-2">
+                      <button 
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                      </button>
+                      
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                          let pageNum = currentPage;
+                          if (currentPage <= 3) pageNum = i + 1;
+                          else if (currentPage >= totalPages - 2) pageNum = totalPages - 4 + i;
+                          else pageNum = currentPage - 2 + i;
                           
-                          <div className="flex items-center gap-2 text-slate-500 text-xs mb-6 font-medium">
-                            <MapPin className="w-3.5 h-3.5 text-red-500" />
-                            <span className="truncate">{project.location}</span>
-                          </div>
+                          if (pageNum <= 0 || pageNum > totalPages) return null;
 
-                          <div className="grid grid-cols-3 gap-4 py-6 border-y border-slate-50 mb-6">
-                            <div>
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Vốn đầu tư</p>
-                              <p className="text-sm font-extrabold text-red-600 font-mono">${project.investmentCapital}M</p>
-                            </div>
-                            <div>
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quy mô</p>
-                              <p className="text-sm font-extrabold text-red-600 font-mono">{project.scale}</p>
-                            </div>
-                            <div>
-                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Hoàn thành</p>
-                              <p className="text-sm font-extrabold text-red-600 font-mono">{project.completionDate}</p>
-                            </div>
-                          </div>
+                          return (
+                            <button
+                              key={pageNum}
+                              onClick={() => setCurrentPage(pageNum)}
+                              className={cn(
+                                "w-10 h-10 rounded-xl text-xs font-bold transition-all",
+                                currentPage === pageNum 
+                                  ? "bg-red-600 text-white shadow-lg shadow-red-900/20" 
+                                  : "bg-white border border-slate-100 text-slate-600 hover:bg-slate-50"
+                              )}
+                            >
+                              {pageNum}
+                            </button>
+                          );
+                        })}
+                      </div>
 
-                          <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                            <div className="flex items-center gap-1.5">
-                              <Anchor className="w-3 h-3" /> Cảng: {project.distanceToPort}km
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <Plane className="w-3 h-3" /> Sân bay: {project.distanceToAirport}km
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <Navigation className="w-3 h-3" /> Cao tốc: {project.distanceToHighway}km
-                            </div>
-                          </div>
-                        </div>
-                      </Link>
-                    </motion.div>
-                  );
-                })}
-              </AnimatePresence>
+                      <button 
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="p-2 rounded-xl border border-slate-200 bg-white text-slate-600 disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50 transition-colors"
+                      >
+                        <ArrowRight className="w-4 h-4" />
+                      </button>
+                      
+                      <span className="ml-4 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                        Trang {currentPage} / {totalPages}
+                      </span>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-center py-20 bg-white rounded-[2.5rem] border border-slate-100">
+                  <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Không tìm thấy dự án nào phù hợp.</p>
+                  <button 
+                    onClick={() => {
+                      setSearchTerm('');
+                      setFilters({ province: 'All', stage: 'All', sector: 'All', capitalType: 'All' });
+                    }}
+                    className="mt-4 text-red-600 font-bold uppercase tracking-widest text-[10px] hover:underline"
+                  >
+                    Xóa tất cả bộ lọc
+                  </button>
+                </div>
+              )}
             </div>
           </main>
         </div>

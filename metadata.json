@@ -1,7 +1,5 @@
 {
   "name": "DACN - Việt Nam Phát Triển",
   "description": "Hệ thống Quản lý Dự án Công nghiệp - Thư viện kỹ thuật và kết nối giao thương B2B hàng đầu tại Việt Nam.",
-  "requestFramePermissions": [
-    "geolocation"
-  ]
+  "requestFramePermissions": []
 }

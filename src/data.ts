@@ -16,12 +16,19 @@ export const MOCK_PROJECTS: Project[] = [
     investor: {
       name: 'HUNG THINH REAL ESTATE BUSINESS INVESTMENT CORPORATION',
       address: '110 - 112 Trần Quốc Toản, Phường 7, Quận 3, TP Hồ Chí Minh',
-      representative: 'Nguyễn Đình Trung - Chủ tịch HĐQT'
+      representative: 'Nguyễn Đình Trung - Chủ tịch HĐQT',
+      projectRepresentative: 'Lê Hoàng Nam - Giám đốc dự án'
     },
     mainContractor: {
       name: 'Công ty CP Hưng Thịnh Icons (HUNGTHINH INCONS)',
       address: '53 Trần Quốc Thảo, P.7, Q.3, TP.HCM',
-      representative: 'Trần Tiến Thanh - General Director'
+      representative: 'Trần Tiến Thanh - General Director',
+      fieldOfActivity: 'Xây dựng dân dụng và công nghiệp',
+      personInCharge: 'Nguyễn Văn Hùng - Chỉ huy trưởng'
+    },
+    technicalDocuments: {
+      capabilityProfile: 'Hồ sơ năng lực Hưng Thịnh Incons 2024',
+      preliminaryDrawings: 'Bản vẽ thiết kế cơ sở Miami Homes'
     },
     capitalType: 'DDI',
     investmentType: 'BUILDING',

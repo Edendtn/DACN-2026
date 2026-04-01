@@ -1,9 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { LayoutDashboard, Users, Briefcase, MessageSquare, TrendingUp, Search, Filter, MoreVertical, CheckCircle2, XCircle } from 'lucide-react';
-import { MOCK_LEADS, MOCK_PROJECTS } from '../data';
+import { LayoutDashboard, Users, Briefcase, MessageSquare, TrendingUp, Search, Filter, MoreVertical, CheckCircle2, XCircle, Newspaper, BookOpen, Plus, Loader2, RefreshCw } from 'lucide-react';
+import { MOCK_LEADS } from '../data';
 import { cn } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, writeBatch, doc, deleteDoc } from 'firebase/firestore';
+import { db, auth, googleProvider } from '../firebase';
+import { fetchProjectsFromSheet } from '../services/sheetService';
+import { AnimatePresence } from 'framer-motion';
+import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
+import { ExternalLink } from 'lucide-react';
+import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
 
 const data = [
   { name: 'Jan', leads: 40, projects: 24 },
@@ -15,22 +22,375 @@ const data = [
 ];
 
 export const AdminDashboardPage = () => {
-  const [activeTab, setActiveTab] = useState<'leads' | 'projects'>('leads');
+  const [activeTab, setActiveTab] = useState<'leads' | 'projects' | 'news' | 'blog'>('leads');
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState<string | React.ReactNode>('');
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [modalType, setModalType] = useState<'news' | 'blog'>('news');
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [contentList, setContentList] = useState<any[]>([]);
+  const [formData, setFormData] = useState({
+    title: '',
+    summary: '',
+    content: '',
+    author: 'Admin',
+    category: 'Kinh tế',
+    academicCategory: 'Kỹ thuật',
+    image: '',
+    source: 'Việt Nam Phát Triển',
+    tags: ''
+  });
+  const [stats, setStats] = useState({
+    leads: 1284,
+    projects: 0,
+    news: 0,
+    blog: 0
+  });
+
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  const fetchContent = async (type: 'news' | 'blog') => {
+    setLoadingContent(true);
+    try {
+      const q = query(collection(db, type), orderBy('createdAt', 'desc'));
+      let querySnapshot;
+      try {
+        querySnapshot = await getDocs(q);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, type);
+        return;
+      }
+      const data = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setContentList(data);
+    } catch (error) {
+      console.error("Error fetching content:", error);
+    } finally {
+      setLoadingContent(false);
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.log("Auth state changed:", user?.email);
+      if (user && user.email === 'doantrungnghiavt@gmail.com') {
+        setIsAdmin(true);
+      } else {
+        setIsAdmin(false);
+      }
+      setIsAuthLoading(false);
+    });
+
+    const fetchStats = async () => {
+      try {
+        // Test connection
+        setMigrationStatus('Đang kiểm tra kết nối Firestore...');
+        let projectsSnap, newsSnap, blogSnap, leadsSnap;
+        try {
+          projectsSnap = await getDocs(collection(db, 'projects'));
+          newsSnap = await getDocs(collection(db, 'news'));
+          blogSnap = await getDocs(collection(db, 'blog'));
+          leadsSnap = await getDocs(collection(db, 'leads'));
+        } catch (error) {
+          handleFirestoreError(error, OperationType.GET, 'multiple');
+          return;
+        }
+        
+        setStats({
+          projects: projectsSnap.size,
+          news: newsSnap.size,
+          blog: blogSnap.size,
+          leads: leadsSnap.size
+        });
+        setMigrationStatus('Kết nối Firestore OK.');
+        setTimeout(() => setMigrationStatus(''), 3000);
+      } catch (error) {
+        console.error("Error fetching stats:", error);
+        const errMessage = (error as Error).message;
+        if (errMessage.includes('Missing or insufficient permissions')) {
+          setMigrationStatus('Lỗi: Bạn không có quyền truy cập dữ liệu Firestore. Hãy kiểm tra lại tài khoản admin.');
+        } else {
+          setMigrationStatus('Lỗi kết nối Firestore: ' + errMessage);
+        }
+      }
+    };
+    fetchStats();
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogin = async () => {
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setIsAdmin(false);
+    } catch (error) {
+      console.error("Logout failed:", error);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'news' || activeTab === 'blog') {
+      fetchContent(activeTab);
+    }
+  }, [activeTab]);
+
+  const handleAddContent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoadingContent(true);
+    try {
+      const collectionName = modalType;
+      const dataToSave = {
+        ...formData,
+        tags: formData.tags ? formData.tags.split(',').map(t => t.trim()) : [],
+        publishedAt: serverTimestamp(),
+        createdAt: serverTimestamp()
+      };
+      
+      // Remove fields that don't belong to the specific type
+      if (modalType === 'news') {
+        delete (dataToSave as any).academicCategory;
+        delete (dataToSave as any).tags;
+      } else {
+        delete (dataToSave as any).category;
+        delete (dataToSave as any).source;
+        delete (dataToSave as any).summary;
+      }
+
+      try {
+        await addDoc(collection(db, collectionName), dataToSave);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, collectionName);
+      }
+      setShowModal(false);
+      setFormData({
+        title: '',
+        summary: '',
+        content: '',
+        author: 'Admin',
+        category: 'Kinh tế',
+        academicCategory: 'Kỹ thuật',
+        image: '',
+        source: 'Việt Nam Phát Triển',
+        tags: ''
+      });
+      fetchContent(modalType);
+      // Refresh stats
+      let snap;
+      try {
+        snap = await getDocs(collection(db, modalType));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, modalType);
+        return;
+      }
+      setStats(prev => ({ ...prev, [modalType]: snap.size }));
+    } catch (error) {
+      console.error("Error adding content:", error);
+      setMigrationStatus("Lỗi khi thêm nội dung: " + (error as Error).message);
+      setTimeout(() => setMigrationStatus(''), 5000);
+    } finally {
+      setLoadingContent(false);
+    }
+  };
+
+  const handleDeleteContent = async (id: string, type: string) => {
+    try {
+      try {
+        await deleteDoc(doc(db, type, id));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.DELETE, `${type}/${id}`);
+      }
+      fetchContent(type as any);
+      // Refresh stats
+      let snap;
+      try {
+        snap = await getDocs(collection(db, type));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, type);
+        return;
+      }
+      setStats(prev => ({ ...prev, [type]: snap.size }));
+    } catch (error) {
+      console.error("Error deleting content:", error);
+    }
+  };
+
+  const handleMigrateSheet = async () => {
+    console.log("handleMigrateSheet called");
+    setIsMigrating(true);
+    setMigrationStatus('Đang tải dữ liệu từ Google Sheet (Bỏ qua cache)...');
+    try {
+      const sheetData = await fetchProjectsFromSheet(true);
+      console.log("Sheet data fetched:", sheetData);
+      
+      if (!sheetData || sheetData.length === 0) {
+        console.error("No projects found in sheet data. Check console for CSV preview.");
+        // Check if there's a more detailed error in console
+        setMigrationStatus(
+          <div>
+            <p className="mb-2">Không tìm thấy dữ liệu trong Google Sheet.</p>
+            <p className="text-xs opacity-80">Hãy đảm bảo bạn đã chọn "Comma-separated values (.csv)" khi Publish to web.</p>
+            <a 
+              href="https://docs.google.com/spreadsheets/d/e/2PACX-1vRz-6AZlmqBfu2ak70GfmpjASXN41l6NEtbIRscw-e5RaVmEWWqTPm8GjNEJ5_txXoom0sBZtfltg49/pub?gid=0&single=true&output=csv" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="text-white underline mt-2 block"
+            >
+              Click vào đây để kiểm tra link CSV
+            </a>
+          </div>
+        );
+        setTimeout(() => setMigrationStatus(''), 15000);
+        return;
+      }
+      
+      setMigrationStatus(`Đã tải ${sheetData.length} dự án. Đang chuẩn bị lưu vào Firestore...`);
+      
+      // Firestore batch limit is 500
+      const chunks = [];
+      for (let i = 0; i < sheetData.length; i += 500) {
+        chunks.push(sheetData.slice(i, i + 500));
+      }
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        setMigrationStatus(`Đang lưu vào Firestore (Gói ${i + 1}/${chunks.length})...`);
+        const batch = writeBatch(db);
+        chunk.forEach((project) => {
+          const projectRef = doc(collection(db, 'projects'), project.id);
+          batch.set(projectRef, {
+            ...project,
+            updatedAt: serverTimestamp(),
+            createdAt: serverTimestamp()
+          });
+        });
+        try {
+          await batch.commit();
+        } catch (error) {
+          handleFirestoreError(error, OperationType.WRITE, 'projects (batch)');
+          throw error; // Re-throw to stop migration
+        }
+      }
+      
+      setMigrationStatus('Đồng bộ thành công! Đã lưu ' + sheetData.length + ' dự án.');
+      // Refresh stats
+      let projectsSnap;
+      try {
+        projectsSnap = await getDocs(collection(db, 'projects'));
+      } catch (error) {
+        handleFirestoreError(error, OperationType.GET, 'projects');
+        return;
+      }
+      setStats(prev => ({ ...prev, projects: projectsSnap.size }));
+      
+      setTimeout(() => setMigrationStatus(''), 5000);
+    } catch (error) {
+      console.error("Migration error:", error);
+      setMigrationStatus('Lỗi đồng bộ: ' + (error as Error).message);
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  if (isAuthLoading) {
+    return (
+      <div className="pt-32 pb-24 text-center">
+        <Loader2 className="w-12 h-12 text-red-600 animate-spin mx-auto mb-4" />
+        <p className="text-slate-500 font-bold uppercase tracking-widest text-xs">Đang kiểm tra quyền truy cập...</p>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="pt-32 pb-24 text-center">
+        <div className="max-w-md mx-auto bg-white p-12 rounded-[3rem] shadow-sm border border-slate-100">
+          <XCircle className="w-16 h-16 text-red-600 mx-auto mb-6" />
+          <h1 className="text-2xl font-bold text-slate-900 mb-2 font-headline">Truy cập bị từ chối</h1>
+          <p className="text-slate-500 mb-8">Bạn không có quyền truy cập vào trang quản trị. Vui lòng đăng nhập bằng tài khoản admin.</p>
+          <button 
+            onClick={handleLogin}
+            className="w-full bg-red-600 text-white py-4 rounded-2xl font-bold text-sm uppercase tracking-widest shadow-lg shadow-red-900/10 hover:bg-red-700 transition-all"
+          >
+            Đăng nhập với Google
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="pt-24 pb-24 bg-[#f7fafc] min-h-screen">
       <div className="max-w-[1440px] mx-auto px-8">
         <header className="flex justify-between items-center mb-12">
           <div>
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tighter font-headline">Lead Tracking & Admin</h1>
-            <p className="text-slate-500 mt-2 font-medium">Quản lý khách hàng tiềm năng và dữ liệu dự án từ Google Sheets.</p>
+            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tighter font-headline">Admin Control Panel</h1>
+            <p className="text-slate-500 mt-2 font-medium">
+              Quản lý nội dung, khách hàng và hệ thống dữ liệu. 
+              <span className="ml-2 text-red-600 font-bold">({auth.currentUser?.email})</span>
+              <button 
+                onClick={handleLogout}
+                className="ml-4 text-xs text-slate-400 hover:text-red-600 underline"
+              >
+                Đăng xuất
+              </button>
+            </p>
           </div>
-          <div className="flex gap-4">
-            <button className="bg-white border border-slate-200 text-red-600 px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-slate-50 transition-all">
-              Đồng bộ Google Sheets
+          <div className="flex gap-4 items-center">
+            <a 
+              href="https://console.firebase.google.com/project/gen-lang-client-0352289724/firestore/databases/ai-studio-bc5f09d1-b0d7-40ff-bb58-0e6486653a36/data"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-slate-400 hover:text-red-600 transition-colors text-xs font-bold uppercase tracking-widest"
+            >
+              <ExternalLink className="w-3 h-3" /> Firebase Console
+            </a>
+            <div className="h-4 w-px bg-slate-200 mx-2"></div>
+            {migrationStatus && (
+              <span className="text-xs font-bold text-red-600 animate-pulse">{migrationStatus}</span>
+            )}
+            <button 
+              onClick={handleMigrateSheet}
+              disabled={isMigrating}
+              className="flex items-center gap-2 bg-white border border-slate-200 text-red-600 px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-slate-50 transition-all disabled:opacity-50"
+            >
+              {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+              Đồng bộ Firestore
             </button>
-            <button className="bg-red-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:shadow-lg transition-all">
-              Xuất báo cáo PDF
+            <button 
+              onClick={async () => {
+                try {
+                  const res = await fetch('https://docs.google.com/spreadsheets/d/e/2PACX-1vRz-6AZlmqBfu2ak70GfmpjASXN41l6NEtbIRscw-e5RaVmEWWqTPm8GjNEJ5_txXoom0sBZtfltg49/pub?gid=0&single=true&output=csv');
+                  const text = await res.text();
+                  console.log("TEST FETCH SUCCESS:", text.substring(0, 500));
+                  alert("Kết nối thành công! Hãy kiểm tra Console (F12) để xem dữ liệu.");
+                } catch (e) {
+                  console.error("TEST FETCH FAILED:", e);
+                  alert("Lỗi kết nối: " + (e as Error).message);
+                }
+              }}
+              className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-sm hover:bg-slate-900 transition-all"
+            >
+              Test Sheet
+            </button>
+            <button 
+              onClick={() => {
+                setModalType(activeTab === 'blog' ? 'blog' : 'news');
+                setShowModal(true);
+              }}
+              className="bg-red-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:shadow-lg transition-all"
+            >
+              Thêm nội dung mới
             </button>
           </div>
         </header>
@@ -38,10 +398,10 @@ export const AdminDashboardPage = () => {
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
           {[
-            { label: 'Tổng Leads', value: '1,284', icon: Users, color: 'red' },
-            { label: 'Dự án mới', value: '42', icon: Briefcase, color: 'green' },
-            { label: 'Tỷ lệ chuyển đổi', value: '12.5%', icon: TrendingUp, color: 'purple' },
-            { label: 'Tin nhắn chờ', value: '18', icon: MessageSquare, color: 'orange' },
+            { label: 'Tổng Leads', value: stats.leads.toLocaleString(), icon: Users, color: 'red' },
+            { label: 'Dự án (Firestore)', value: stats.projects.toString(), icon: Briefcase, color: 'green' },
+            { label: 'Tin tức', value: stats.news.toString(), icon: Newspaper, color: 'purple' },
+            { label: 'Blog học thuật', value: stats.blog.toString(), icon: BookOpen, color: 'orange' },
           ].map((stat, i) => (
             <motion.div 
               key={i}
@@ -69,33 +429,26 @@ export const AdminDashboardPage = () => {
           {/* Main List Area */}
           <div className="lg:col-span-2 space-y-8">
             <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-100 overflow-hidden">
-              <div className="p-8 border-b border-slate-50 flex justify-between items-center">
-                <div className="flex gap-4">
-                  <button 
-                    onClick={() => setActiveTab('leads')}
-                    className={cn(
-                      "px-6 py-2 rounded-xl font-bold text-sm transition-all",
-                      activeTab === 'leads' ? "bg-red-600 text-white" : "text-slate-400 hover:text-red-600"
-                    )}
-                  >
-                    Leads List
-                  </button>
-                  <button 
-                    onClick={() => setActiveTab('projects')}
-                    className={cn(
-                      "px-6 py-2 rounded-xl font-bold text-sm transition-all",
-                      activeTab === 'projects' ? "bg-red-600 text-white" : "text-slate-400 hover:text-red-600"
-                    )}
-                  >
-                    Projects List
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-3 h-3" />
-                    <input className="bg-[#f1f4f6] border-none rounded-lg py-2 pl-8 pr-4 text-xs w-48" placeholder="Tìm kiếm..." />
-                  </div>
-                  <button className="p-2 bg-[#f1f4f6] rounded-lg"><Filter className="w-4 h-4 text-slate-400" /></button>
+              <div className="p-8 border-b border-slate-50 flex justify-between items-center overflow-x-auto">
+                <div className="flex gap-4 min-w-max">
+                  {[
+                    { id: 'leads', name: 'Leads', icon: Users },
+                    { id: 'projects', name: 'Projects', icon: Briefcase },
+                    { id: 'news', name: 'News', icon: Newspaper },
+                    { id: 'blog', name: 'Blog', icon: BookOpen },
+                  ].map(tab => (
+                    <button 
+                      key={tab.id}
+                      onClick={() => setActiveTab(tab.id as any)}
+                      className={cn(
+                        "flex items-center gap-2 px-6 py-2 rounded-xl font-bold text-sm transition-all",
+                        activeTab === tab.id ? "bg-red-600 text-white" : "text-slate-400 hover:text-red-600"
+                      )}
+                    >
+                      <tab.icon className="w-4 h-4" />
+                      {tab.name}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -103,15 +456,15 @@ export const AdminDashboardPage = () => {
                 <table className="w-full text-left">
                   <thead className="bg-[#f8fafc]">
                     <tr className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                      <th className="px-8 py-4">Tên / Công ty</th>
-                      <th className="px-8 py-4">Mối quan tâm</th>
+                      <th className="px-8 py-4">Thông tin</th>
+                      <th className="px-8 py-4">Phân loại</th>
                       <th className="px-8 py-4">Trạng thái</th>
                       <th className="px-8 py-4">Ngày tạo</th>
                       <th className="px-8 py-4"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
-                    {MOCK_LEADS.map(lead => (
+                    {activeTab === 'leads' && MOCK_LEADS.map(lead => (
                       <tr key={lead.id} className="hover:bg-slate-50 transition-colors group">
                         <td className="px-8 py-6">
                           <p className="font-bold text-slate-900 text-sm">{lead.name}</p>
@@ -136,6 +489,59 @@ export const AdminDashboardPage = () => {
                         </td>
                       </tr>
                     ))}
+                    {(activeTab === 'news' || activeTab === 'blog') && (
+                      loadingContent ? (
+                        <tr>
+                          <td colSpan={5} className="px-8 py-20 text-center">
+                            <Loader2 className="w-8 h-8 text-red-600 animate-spin mx-auto mb-4" />
+                            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Đang tải dữ liệu...</p>
+                          </td>
+                        </tr>
+                      ) : contentList.length > 0 ? (
+                        contentList.map(item => (
+                          <tr key={item.id} className="hover:bg-slate-50 transition-colors group">
+                            <td className="px-8 py-6">
+                              <p className="font-bold text-slate-900 text-sm line-clamp-1">{item.title}</p>
+                              <p className="text-xs text-slate-500">{item.author}</p>
+                            </td>
+                            <td className="px-8 py-6">
+                              <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1 rounded-full">{item.category}</span>
+                            </td>
+                            <td className="px-8 py-6">
+                              <span className="text-[10px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-green-50 text-green-600">
+                                Published
+                              </span>
+                            </td>
+                            <td className="px-8 py-6 text-xs text-slate-500">
+                              {item.publishedAt?.toDate ? item.publishedAt.toDate().toLocaleDateString('vi-VN') : 'N/A'}
+                            </td>
+                            <td className="px-8 py-6 text-right">
+                              <button 
+                                onClick={() => handleDeleteContent(item.id, activeTab)}
+                                className="p-2 hover:bg-red-50 rounded-lg transition-colors text-red-600"
+                              >
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={5} className="px-8 py-20 text-center">
+                            <Plus className="w-8 h-8 text-slate-200 mx-auto mb-4" />
+                            <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Chưa có dữ liệu. Nhấn "Thêm nội dung mới" để bắt đầu.</p>
+                          </td>
+                        </tr>
+                      )
+                    )}
+                    {activeTab === 'projects' && (
+                      <tr>
+                        <td colSpan={5} className="px-8 py-20 text-center">
+                          <Briefcase className="w-8 h-8 text-slate-200 mx-auto mb-4" />
+                          <p className="text-slate-400 text-xs font-bold uppercase tracking-widest">Dữ liệu dự án được quản lý qua Google Sheet và đồng bộ Firestore.</p>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -182,6 +588,139 @@ export const AdminDashboardPage = () => {
           </div>
         </div>
       </div>
+
+      {/* Add Content Modal */}
+      <AnimatePresence>
+        {showModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowModal(false)}
+              className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden"
+            >
+              <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                <h3 className="text-xl font-bold text-slate-900 font-headline">
+                  Thêm {modalType === 'news' ? 'Tin tức' : 'Blog'} mới
+                </h3>
+                <button onClick={() => setShowModal(false)} className="p-2 hover:bg-white rounded-xl transition-colors">
+                  <XCircle className="w-6 h-6 text-slate-400" />
+                </button>
+              </div>
+              <form onSubmit={handleAddContent} className="p-8 space-y-6 max-h-[70vh] overflow-y-auto">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tiêu đề</label>
+                    <input 
+                      required
+                      type="text" 
+                      value={formData.title}
+                      onChange={e => setFormData({...formData, title: e.target.value})}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      placeholder="Nhập tiêu đề..."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                      {modalType === 'news' ? 'Chuyên mục' : 'Lĩnh vực học thuật'}
+                    </label>
+                    <input 
+                      required
+                      type="text" 
+                      value={modalType === 'news' ? formData.category : formData.academicCategory}
+                      onChange={e => setFormData({
+                        ...formData, 
+                        [modalType === 'news' ? 'category' : 'academicCategory']: e.target.value
+                      })}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      placeholder={modalType === 'news' ? "Kinh tế, Đầu tư..." : "Kỹ thuật, Xây dựng..."}
+                    />
+                  </div>
+                </div>
+
+                {modalType === 'news' && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tóm tắt</label>
+                    <textarea 
+                      required
+                      rows={2}
+                      value={formData.summary}
+                      onChange={e => setFormData({...formData, summary: e.target.value})}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      placeholder="Mô tả ngắn gọn nội dung..."
+                    />
+                  </div>
+                )}
+
+                {modalType === 'blog' && (
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tags (cách nhau bằng dấu phẩy)</label>
+                    <input 
+                      type="text" 
+                      value={formData.tags}
+                      onChange={e => setFormData({...formData, tags: e.target.value})}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      placeholder="kỹ thuật, xây dựng, học thuật..."
+                    />
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Nội dung (Markdown)</label>
+                  <textarea 
+                    required
+                    rows={6}
+                    value={formData.content}
+                    onChange={e => setFormData({...formData, content: e.target.value})}
+                    className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all font-mono"
+                    placeholder="Nhập nội dung chi tiết..."
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">URL Hình ảnh</label>
+                    <input 
+                      type="text" 
+                      value={formData.image}
+                      onChange={e => setFormData({...formData, image: e.target.value})}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      placeholder="https://..."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tác giả</label>
+                    <input 
+                      type="text" 
+                      value={formData.author}
+                      onChange={e => setFormData({...formData, author: e.target.value})}
+                      className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button 
+                    type="submit"
+                    disabled={loadingContent}
+                    className="w-full bg-red-600 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-red-900/20 hover:bg-red-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {loadingContent ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Xuất bản nội dung
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
