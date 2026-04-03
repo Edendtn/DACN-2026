@@ -2,15 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { LayoutDashboard, Users, Briefcase, MessageSquare, TrendingUp, Search, Filter, MoreVertical, CheckCircle2, XCircle, Newspaper, BookOpen, Plus, Loader2, RefreshCw } from 'lucide-react';
 import { MOCK_LEADS } from '../data';
-import { cn } from '../lib/utils';
+import { cn, cleanData } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
-import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, writeBatch, doc, deleteDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, orderBy, serverTimestamp, writeBatch, doc, deleteDoc, setDoc } from 'firebase/firestore';
 import { db, auth, googleProvider } from '../firebase';
 import { fetchProjectsFromSheet } from '../services/sheetService';
 import { AnimatePresence } from 'framer-motion';
 import { onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { ExternalLink } from 'lucide-react';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
+import { VIETNAM_PROVINCES, CAPITAL_TYPES, STAGES, CONSTRUCTION_TYPES } from '../constants';
 
 const data = [
   { name: 'Jan', leads: 40, projects: 24 },
@@ -21,9 +22,14 @@ const data = [
   { name: 'Jun', leads: 23, projects: 38 },
 ];
 
+import { fetchAiProjectData } from '../services/aiService';
+import { Project } from '../types';
+
 export const AdminDashboardPage = () => {
   const [activeTab, setActiveTab] = useState<'leads' | 'projects' | 'news' | 'blog'>('leads');
   const [isMigrating, setIsMigrating] = useState(false);
+  const [isAiProcessing, setIsAiProcessing] = useState(false);
+  const shouldStopBulkRef = React.useRef(false);
   const [migrationStatus, setMigrationStatus] = useState<string | React.ReactNode>('');
   const [isAdmin, setIsAdmin] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -44,11 +50,228 @@ export const AdminDashboardPage = () => {
   const [stats, setStats] = useState({
     leads: 1284,
     projects: 0,
+    projectsReal: 0,
     news: 0,
     blog: 0
   });
 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+
+  const handleBulkAiUpdate = async () => {
+    setIsMigrating(true);
+    setIsAiProcessing(true);
+    setMigrationStatus('Bắt đầu phân tích AI cho các dự án cần cập nhật...');
+    try {
+      const projectsSnap = await getDocs(collection(db, 'projects'));
+      const realSnap = await getDocs(collection(db, 'project_real'));
+      
+      const realDocsMap = new Map(realSnap.docs.map(doc => [doc.id, doc.data()]));
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      
+      const projectsToProcess = projectsSnap.docs.filter(doc => {
+        const realData = realDocsMap.get(doc.id);
+        if (!realData) return true; // Chưa từng xử lý AI
+        
+        // Kiểm tra xem đã xử lý AI trong 30 ngày qua chưa
+        if (realData.lastAiUpdate) {
+          const lastUpdate = new Date(realData.lastAiUpdate);
+          if (lastUpdate > thirtyDaysAgo) {
+            return false; // Bỏ qua nếu mới xử lý gần đây
+          }
+        }
+        return true; // Cần xử lý lại
+      });
+      
+      if (projectsToProcess.length === 0) {
+        setMigrationStatus('Tất cả dự án đã được AI xử lý trong 30 ngày qua. Không có dữ liệu mới.');
+        setTimeout(() => setMigrationStatus(''), 5000);
+        setIsAiProcessing(false);
+        setIsMigrating(false);
+        return;
+      }
+      
+      setMigrationStatus(`Tìm thấy ${projectsToProcess.length} dự án cần xử lý. Đang bắt đầu...`);
+      
+      let processedCount = 0;
+      shouldStopBulkRef.current = false;
+      for (const projectDoc of projectsToProcess) {
+        if (shouldStopBulkRef.current) {
+          setMigrationStatus(`Đã dừng xử lý AI. Đã xử lý ${processedCount} dự án.`);
+          break;
+        }
+        const data = projectDoc.data() as Project;
+        setMigrationStatus(`Đang xử lý AI (${processedCount + 1}/${projectsToProcess.length}): ${data.name}...`);
+        
+        try {
+          await fetchAiProjectData(data.name, data);
+          processedCount++;
+          
+          // Add a 10-second delay between calls to stay under the 15 RPM limit (free tier)
+          if (processedCount < projectsToProcess.length && !shouldStopBulkRef.current) {
+            setMigrationStatus(`Đang chờ 10 giây để tránh giới hạn API (Đã xử lý ${processedCount}/${projectsToProcess.length})...`);
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
+        } catch (err) {
+          console.error(`Error processing AI for ${data.name}:`, err);
+          setMigrationStatus(`Lỗi xử lý ${data.name}: ${(err as Error).message}. Đang chờ 15s...`);
+          await new Promise(resolve => setTimeout(resolve, 15000));
+        }
+      }
+      
+      if (!shouldStopBulkRef.current) {
+        setMigrationStatus(`Hoàn tất! Đã xử lý AI cho ${processedCount} dự án.`);
+        setTimeout(() => setMigrationStatus(''), 5000);
+      }
+      
+      // Refresh stats
+      const rSnap = await getDocs(collection(db, 'project_real'));
+      setStats(prev => ({ ...prev, projectsReal: rSnap.size }));
+    } catch (error) {
+      console.error("Bulk AI error:", error);
+      setMigrationStatus('Lỗi xử lý AI: ' + (error as Error).message);
+    } finally {
+      setIsMigrating(false);
+      setIsAiProcessing(false);
+    }
+  };
+
+  const handleCleanUpData = async () => {
+    setIsMigrating(true);
+    setMigrationStatus('Đang rà soát và tối ưu dữ liệu (Deduplication)...');
+    try {
+      const projectsSnap = await getDocs(collection(db, 'projects'));
+      const realSnap = await getDocs(collection(db, 'project_real'));
+      
+      const realIds = new Set(realSnap.docs.map(doc => doc.id));
+      let cleanedCount = 0;
+      
+      const batch = writeBatch(db);
+      
+      projectsSnap.docs.forEach(projectDoc => {
+        if (realIds.has(projectDoc.id)) {
+          // It exists in both. Keep only reference fields in 'projects'
+          const data = projectDoc.data();
+          if (!data.name) return; // Skip if name is missing to avoid rule violation
+          
+          const referenceFields = {
+            id: projectDoc.id,
+            name: data.name,
+            investmentCapital: data.investmentCapital,
+            capitalType: data.capitalType,
+            province: data.province,
+            constructionType: data.constructionType,
+            stage: data.stage,
+            sector: data.sector,
+            location: data.location,
+            updatedAt: serverTimestamp()
+          };
+          
+          // Check if it has extra fields
+          const currentKeys = Object.keys(data);
+          const refKeys = Object.keys(referenceFields);
+          const hasExtra = currentKeys.some(k => !refKeys.includes(k) && k !== 'createdAt' && k !== 'updatedAt');
+          
+          if (hasExtra) {
+            batch.set(doc(db, 'projects', projectDoc.id), cleanData(referenceFields));
+            cleanedCount++;
+          }
+        }
+      });
+      
+      if (cleanedCount > 0) {
+        await batch.commit();
+        setMigrationStatus(`Đã tối ưu hóa ${cleanedCount} dự án trùng lặp.`);
+      } else {
+        setMigrationStatus('Dữ liệu đã được tối ưu, không tìm thấy trùng lặp mới.');
+      }
+      
+      setTimeout(() => setMigrationStatus(''), 5000);
+    } catch (error) {
+      console.error("Clean up error:", error);
+      setMigrationStatus('Lỗi rà soát: ' + (error as Error).message);
+    } finally {
+      setIsMigrating(false);
+    }
+  };
+
+  const handleAddProject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoadingContent(true);
+    try {
+      // 1. Find max ID
+      const projectsSnap = await getDocs(collection(db, 'projects'));
+      const realSnap = await getDocs(collection(db, 'project_real'));
+      
+      let maxId = -1;
+      const allDocs = [...projectsSnap.docs, ...realSnap.docs];
+      allDocs.forEach(d => {
+        const match = d.id.match(/sheet-(\d+)/);
+        if (match) {
+          const num = parseInt(match[1]);
+          if (num > maxId) maxId = num;
+        } else {
+          const num = parseInt(d.id);
+          if (!isNaN(num) && num > maxId) maxId = num;
+        }
+      });
+      
+      const nextId = `${maxId + 1}`;
+      
+      const newProjectData = {
+        ...projectFormData,
+        id: nextId,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      
+      // Save to projects (reference)
+      await setDoc(doc(db, 'projects', nextId), cleanData({
+        id: nextId,
+        name: newProjectData.name,
+        investmentCapital: newProjectData.investmentCapital,
+        capitalType: newProjectData.capitalType,
+        province: newProjectData.province,
+        constructionType: newProjectData.constructionType,
+        stage: newProjectData.stage,
+        sector: newProjectData.sector,
+        location: newProjectData.location,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      }));
+      
+      // Save to project_real (full)
+      await setDoc(doc(db, 'project_real', nextId), cleanData(newProjectData));
+      
+      setShowProjectModal(false);
+      setMigrationStatus(`Đã thêm dự án mới: ${nextId}`);
+      setTimeout(() => setMigrationStatus(''), 5000);
+      
+      // Refresh stats
+      const pSnap = await getDocs(collection(db, 'projects'));
+      setStats(prev => ({ ...prev, projects: pSnap.size }));
+    } catch (error) {
+      console.error("Error adding project:", error);
+      setMigrationStatus("Lỗi khi thêm dự án: " + (error as Error).message);
+    } finally {
+      setLoadingContent(false);
+    }
+  };
+
+  const [showProjectModal, setShowProjectModal] = useState(false);
+  const [projectFormData, setProjectFormData] = useState({
+    name: '',
+    location: '',
+    province: 'Hà Nội',
+    investmentCapital: '0',
+    capitalType: 'FDI',
+    constructionType: 'FACTORY',
+    stage: 'Đang thực hiện',
+    sector: 'Công nghiệp',
+    description: '',
+    investor: { name: '', address: '', representative: '' },
+    mainContractor: { name: '', address: '', representative: '' }
+  });
 
   const fetchContent = async (type: 'news' | 'blog') => {
     setLoadingContent(true);
@@ -88,19 +311,17 @@ export const AdminDashboardPage = () => {
       try {
         // Test connection
         setMigrationStatus('Đang kiểm tra kết nối Firestore...');
-        let projectsSnap, newsSnap, blogSnap, leadsSnap;
-        try {
-          projectsSnap = await getDocs(collection(db, 'projects'));
-          newsSnap = await getDocs(collection(db, 'news'));
-          blogSnap = await getDocs(collection(db, 'blog'));
-          leadsSnap = await getDocs(collection(db, 'leads'));
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, 'multiple');
-          return;
-        }
+        const [projectsSnap, realSnap, newsSnap, blogSnap, leadsSnap] = await Promise.all([
+          getDocs(collection(db, 'projects')),
+          getDocs(collection(db, 'project_real')),
+          getDocs(collection(db, 'news')),
+          getDocs(collection(db, 'blog')),
+          getDocs(collection(db, 'leads'))
+        ]);
         
         setStats({
           projects: projectsSnap.size,
+          projectsReal: realSnap.size,
           news: newsSnap.size,
           blog: blogSnap.size,
           leads: leadsSnap.size
@@ -332,68 +553,94 @@ export const AdminDashboardPage = () => {
   return (
     <div className="pt-24 pb-24 bg-[#f7fafc] min-h-screen">
       <div className="max-w-[1440px] mx-auto px-8">
-        <header className="flex justify-between items-center mb-12">
-          <div>
-            <h1 className="text-4xl font-extrabold text-slate-900 tracking-tighter font-headline">Admin Control Panel</h1>
-            <p className="text-slate-500 mt-2 font-medium">
-              Quản lý nội dung, khách hàng và hệ thống dữ liệu. 
-              <span className="ml-2 text-red-600 font-bold">({auth.currentUser?.email})</span>
-              <button 
-                onClick={handleLogout}
-                className="ml-4 text-xs text-slate-400 hover:text-red-600 underline"
+        <div className="flex flex-col gap-6 mb-12">
+          <header className="flex justify-between items-start">
+            <div>
+              <h1 className="text-4xl font-extrabold text-slate-900 tracking-tighter font-headline">Admin Control Panel</h1>
+              <p className="text-slate-500 mt-2 font-medium">
+                Quản lý nội dung, khách hàng và hệ thống dữ liệu. 
+                <span className="ml-2 text-red-600 font-bold">({auth.currentUser?.email})</span>
+                <button 
+                  onClick={handleLogout}
+                  className="ml-4 text-xs text-slate-400 hover:text-red-600 underline"
+                >
+                  Đăng xuất
+                </button>
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <a 
+                href="https://console.firebase.google.com/project/gen-lang-client-0352289724/firestore/databases/ai-studio-bc5f09d1-b0d7-40ff-bb58-0e6486653a36/data"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-slate-500 hover:text-slate-700 transition-colors text-sm font-medium bg-white border border-slate-200 px-4 py-2.5 rounded-xl shadow-sm"
               >
-                Đăng xuất
+                <ExternalLink className="w-4 h-4" /> Firebase
+              </a>
+              <button 
+                onClick={() => setShowProjectModal(true)}
+                className="flex items-center gap-2 bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-slate-800 transition-all"
+              >
+                <Plus className="w-4 h-4" /> Thêm dự án
               </button>
-            </p>
-          </div>
-          <div className="flex gap-4 items-center">
-            <a 
-              href="https://console.firebase.google.com/project/gen-lang-client-0352289724/firestore/databases/ai-studio-bc5f09d1-b0d7-40ff-bb58-0e6486653a36/data"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 text-slate-400 hover:text-red-600 transition-colors text-xs font-bold uppercase tracking-widest"
-            >
-              <ExternalLink className="w-3 h-3" /> Firebase Console
-            </a>
-            <div className="h-4 w-px bg-slate-200 mx-2"></div>
+              <button 
+                onClick={() => {
+                  setModalType(activeTab === 'blog' ? 'blog' : 'news');
+                  setShowModal(true);
+                }}
+                className="flex items-center gap-2 bg-red-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-red-700 transition-all"
+              >
+                <Plus className="w-4 h-4" /> Thêm bài viết
+              </button>
+            </div>
+          </header>
+
+          {/* System Tools Bar */}
+          <div className="flex items-center justify-between bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={handleMigrateSheet}
+                disabled={isMigrating}
+                className="flex items-center gap-2 bg-blue-50 text-blue-700 hover:bg-blue-100 px-4 py-2 rounded-lg font-semibold text-sm transition-all disabled:opacity-50"
+              >
+                {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                1. Đồng bộ Sheet
+              </button>
+              <button 
+                onClick={handleBulkAiUpdate}
+                disabled={isMigrating}
+                className="flex items-center gap-2 bg-purple-50 text-purple-700 hover:bg-purple-100 px-4 py-2 rounded-lg font-semibold text-sm transition-all disabled:opacity-50"
+              >
+                <Search className={cn("w-4 h-4", isMigrating && "animate-spin")} />
+                2. Phân tích AI
+              </button>
+              <div className="h-4 w-px bg-slate-200 mx-1"></div>
+              <button 
+                onClick={handleCleanUpData}
+                disabled={isMigrating}
+                className="flex items-center gap-2 text-slate-600 hover:bg-slate-50 px-4 py-2 rounded-lg font-medium text-sm transition-all disabled:opacity-50 border border-transparent hover:border-slate-200"
+              >
+                <Filter className={cn("w-4 h-4", isMigrating && "animate-spin")} />
+                Rà soát trùng lặp
+              </button>
+            </div>
+            
             {migrationStatus && (
-              <span className="text-xs font-bold text-red-600 animate-pulse">{migrationStatus}</span>
+              <div className="text-sm font-medium text-slate-700 bg-slate-50 px-4 py-2 rounded-lg border border-slate-100 flex items-center gap-2">
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <span className="animate-pulse">{migrationStatus}</span>
+                {isAiProcessing && (
+                  <button
+                    onClick={() => { shouldStopBulkRef.current = true; }}
+                    className="ml-2 bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded-md text-xs font-bold transition-colors"
+                  >
+                    Dừng lại
+                  </button>
+                )}
+              </div>
             )}
-            <button 
-              onClick={handleMigrateSheet}
-              disabled={isMigrating}
-              className="flex items-center gap-2 bg-white border border-slate-200 text-red-600 px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:bg-slate-50 transition-all disabled:opacity-50"
-            >
-              {isMigrating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-              Đồng bộ Firestore
-            </button>
-            <button 
-              onClick={async () => {
-                try {
-                  const res = await fetch('https://docs.google.com/spreadsheets/d/e/2PACX-1vRz-6AZlmqBfu2ak70GfmpjASXN41l6NEtbIRscw-e5RaVmEWWqTPm8GjNEJ5_txXoom0sBZtfltg49/pub?gid=0&single=true&output=csv');
-                  const text = await res.text();
-                  console.log("TEST FETCH SUCCESS:", text.substring(0, 500));
-                  alert("Kết nối thành công! Hãy kiểm tra Console (F12) để xem dữ liệu.");
-                } catch (e) {
-                  console.error("TEST FETCH FAILED:", e);
-                  alert("Lỗi kết nối: " + (e as Error).message);
-                }
-              }}
-              className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2.5 rounded-xl font-bold text-xs shadow-sm hover:bg-slate-900 transition-all"
-            >
-              Test Sheet
-            </button>
-            <button 
-              onClick={() => {
-                setModalType(activeTab === 'blog' ? 'blog' : 'news');
-                setShowModal(true);
-              }}
-              className="bg-red-600 text-white px-6 py-2.5 rounded-xl font-bold text-sm shadow-sm hover:shadow-lg transition-all"
-            >
-              Thêm nội dung mới
-            </button>
           </div>
-        </header>
+        </div>
 
         {/* Stats Overview */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
@@ -589,7 +836,136 @@ export const AdminDashboardPage = () => {
         </div>
       </div>
 
-      {/* Add Content Modal */}
+            {/* Project Modal */}
+            {showProjectModal && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowProjectModal(false)}
+                  className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+                />
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                  className="relative bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden"
+                >
+                  <div className="p-8 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
+                    <h3 className="text-xl font-bold text-slate-900 font-headline">Thêm dự án mới</h3>
+                    <button onClick={() => setShowProjectModal(false)} className="p-2 hover:bg-white rounded-xl transition-colors">
+                      <XCircle className="w-6 h-6 text-slate-400" />
+                    </button>
+                  </div>
+                  <form onSubmit={handleAddProject} className="p-8 space-y-6 max-h-[70vh] overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tên dự án</label>
+                        <input 
+                          required
+                          type="text" 
+                          value={projectFormData.name}
+                          onChange={e => setProjectFormData({...projectFormData, name: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Tỉnh thành</label>
+                        <select 
+                          value={projectFormData.province}
+                          onChange={e => setProjectFormData({...projectFormData, province: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        >
+                          {VIETNAM_PROVINCES.filter(p => p !== 'All').map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại hình</label>
+                        <select 
+                          value={projectFormData.constructionType}
+                          onChange={e => setProjectFormData({...projectFormData, constructionType: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        >
+                          {CONSTRUCTION_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Lĩnh vực</label>
+                        <input 
+                          type="text" 
+                          value={projectFormData.sector}
+                          onChange={e => setProjectFormData({...projectFormData, sector: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                          placeholder="Ví dụ: Công nghiệp, Dân dụng..."
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Vốn (M$)</label>
+                        <input 
+                          type="text" 
+                          value={projectFormData.investmentCapital}
+                          onChange={e => setProjectFormData({...projectFormData, investmentCapital: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Loại vốn</label>
+                        <select 
+                          value={projectFormData.capitalType}
+                          onChange={e => setProjectFormData({...projectFormData, capitalType: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        >
+                          {CAPITAL_TYPES.filter(t => t !== 'All').map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Giai đoạn</label>
+                        <select 
+                          value={projectFormData.stage}
+                          onChange={e => setProjectFormData({...projectFormData, stage: e.target.value})}
+                          className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                        >
+                          {STAGES.filter(s => s !== 'All').map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Địa chỉ chi tiết</label>
+                      <input 
+                        type="text" 
+                        value={projectFormData.location}
+                        onChange={e => setProjectFormData({...projectFormData, location: e.target.value})}
+                        className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Mô tả dự án</label>
+                      <textarea 
+                        rows={3}
+                        value={projectFormData.description}
+                        onChange={e => setProjectFormData({...projectFormData, description: e.target.value})}
+                        className="w-full bg-slate-50 border-none rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-red-500 transition-all"
+                      />
+                    </div>
+                    <div className="pt-4">
+                      <button 
+                        type="submit"
+                        disabled={loadingContent}
+                        className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-sm shadow-lg shadow-green-900/20 hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {loadingContent ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        Lưu dự án
+                      </button>
+                    </div>
+                  </form>
+                </motion.div>
+              </div>
+            )}
+
+            {/* Add Content Modal */}
       <AnimatePresence>
         {showModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">

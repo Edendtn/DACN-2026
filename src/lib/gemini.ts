@@ -1,8 +1,8 @@
 import { GoogleGenAI, GenerateContentParameters, GenerateContentResponse } from "@google/genai";
 
-const MAX_RETRIES = 5;
-const INITIAL_DELAY = 2000; // 2 seconds
-const MAX_DELAY = 30000; // 30 seconds max delay
+const MAX_RETRIES = 10;
+const INITIAL_DELAY = 5000; // 5 seconds
+const MAX_DELAY = 60000; // 60 seconds max delay
 
 export async function generateContentWithRetry(
   params: GenerateContentParameters,

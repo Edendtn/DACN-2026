@@ -9,32 +9,35 @@ export const fetchAiProjectData = async (projectName: string, currentProject: Pr
   try {
     const response = await generateContentWithRetry({
       model: "gemini-3-flash-preview",
-      contents: `Tìm kiếm và phân tích thông tin chi tiết cho dự án: "${projectName}" tại ${currentProject.location}. 
-      Yêu cầu thông tin bao gồm:
-      1. Vị trí chính xác của dự án: Tìm kiếm địa chỉ cụ thể (Số nhà, tên đường, phường/xã, quận/huyện, tỉnh/thành phố).
-      2. Chủ đầu tư: Tên công ty, Địa chỉ trụ sở, Người đại diện pháp luật.
-      3. Các đơn vị tham gia (nếu có): 
+      contents: `Bạn là một chuyên gia phân tích dữ liệu dự án công nghiệp và hạ tầng tại Việt Nam. 
+      Hãy thực hiện tìm kiếm, tổng hợp và phân tích chuyên sâu cho dự án: "${projectName}" tại ${currentProject.location}. 
+      
+      Yêu cầu phân tích và điền các thông tin còn thiếu sau đây:
+      1. VỊ TRÍ CHÍNH XÁC: Tìm kiếm địa chỉ chi tiết nhất có thể (Số nhà, đường, KCN/Khu kinh tế, phường/xã, quận/huyện, tỉnh/thành phố).
+      2. CHỦ ĐẦU TƯ (INVESTOR): Phân tích mối quan hệ sở hữu (nếu là công ty con), tìm tên đầy đủ, địa chỉ trụ sở chính xác và người đại diện pháp luật hiện tại.
+      3. CÁC ĐƠN VỊ THAM GIA (PARTIES): Tổng hợp danh sách các nhà thầu đã hoặc đang tham gia:
          - Tổng thầu (General Contractor)
          - Nhà thầu xây dựng (Civil Contractor)
          - Nhà thầu kết cấu thép (Steel Structure Contractor)
          - Nhà thầu cơ điện (MEP Contractor)
          - Tư vấn giám sát (Supervision Consultant)
          - Quản lý dự án (Project Management)
-      4. Vị trí chiến lược (Khoảng cách ước tính):
-         - Tên Cảng biển gần nhất và khoảng cách (chỉ ghi số)
-         - Tên Sân bay gần nhất và khoảng cách (chỉ ghi số)
-         - Tên Đường cao tốc gần nhất và khoảng cách (chỉ ghi số)
+      4. VỊ TRÍ CHIẾN LƯỢC & LOGISTICS: Phân tích khả năng kết nối hạ tầng:
+         - Tên Cảng biển/Cảng cạn gần nhất và khoảng cách đường bộ (km).
+         - Tên Sân bay gần nhất và khoảng cách đường bộ (km).
+         - Tên Đường cao tốc/Quốc lộ huyết mạch gần nhất và khoảng cách (km).
       
-      5. Quy mô dự án: Diện tích, số tòa nhà, công suất...
+      5. QUY MÔ & THÔNG SỐ KỸ THUẬT: Diện tích đất (m2/ha), tổng diện tích sàn, số lượng nhà xưởng/tòa nhà, công suất thiết kế (nếu là nhà máy).
       
-      6. PHÂN LOẠI DỰ ÁN (QUAN TRỌNG):
-         - Loại hình: Phân loại vào 1 trong 4 nhóm: "Hạ tầng kỹ thuật (Infrastructure)", "Nông nghiệp & Phát triển nông thôn", "Công nghiệp (Factory/ Industrial)", "Dân dụng (Building/Residential & Commercial)".
-         - Tình trạng hiện tại: Dựa trên phân tích tiến độ so với năm hiện tại (2026), phân loại vào 1 trong 3 nhóm: "Khởi công", "Đang thực hiện", "Hoàn Thành".
-         - Lĩnh vực: Viết một đoạn tóm tắt ngắn gọn (< 100 từ) về sản phẩm hoặc hoạt động sản xuất/kinh doanh của dự án.
+      6. PHÂN LOẠI & ĐÁNH GIÁ (QUAN TRỌNG):
+         - Loại hình: Chọn 1 trong: "Hạ tầng kỹ thuật", "Nông nghiệp & Phát triển nông thôn", "Công nghiệp", "Dân dụng".
+         - Tình trạng hiện tại: Phân tích tin tức mới nhất để xác định: "Khởi công", "Đang thực hiện", "Hoàn Thành".
+         - Lĩnh vực & Hoạt động: Viết một đoạn phân tích chuyên sâu (< 150 từ) về chuỗi giá trị, sản phẩm đầu ra, công nghệ sử dụng hoặc tầm quan trọng kinh tế của dự án.
       
       QUAN TRỌNG: 
-      - Chỉ điền thông tin nếu có thể kiểm chứng.
-      - Trả về kết quả dưới dạng JSON.`,
+      - Sử dụng dữ liệu mới nhất đến năm 2026.
+      - Tổng hợp từ nhiều nguồn tin cậy (Báo chí, Cổng thông tin KCN, Website công ty).
+      - Trả về kết quả dưới dạng JSON chuẩn.`,
       config: {
         responseMimeType: "application/json",
         responseSchema: {
@@ -110,6 +113,10 @@ export const fetchAiProjectData = async (projectName: string, currentProject: Pr
         }
       }
     }, process.env.GEMINI_API_KEY!);
+
+    if (!response.text || response.text.trim() === "") {
+      throw new Error("AI returned an empty response.");
+    }
 
     const aiResult = JSON.parse(response.text);
     

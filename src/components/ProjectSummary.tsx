@@ -82,10 +82,17 @@ export const ProjectSummary: React.FC<ProjectSummaryProps> = ({
       
       if (dataMatch && onDataExtracted) {
         try {
-          const extractedData = JSON.parse(dataMatch[1].trim());
-          onDataExtracted(extractedData);
+          let jsonStr = dataMatch[1].trim();
+          // Remove potential markdown code blocks
+          jsonStr = jsonStr.replace(/^```json\s*/, "").replace(/```$/, "").trim();
+          
+          if (jsonStr) {
+            const extractedData = JSON.parse(jsonStr);
+            onDataExtracted(extractedData);
+          }
         } catch (e) {
           console.error("Failed to parse extracted data:", e);
+          console.log("Raw data that failed to parse:", dataMatch[1]);
         }
       }
       

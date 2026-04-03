@@ -8,6 +8,8 @@ import { Link } from 'react-router-dom';
 import { fetchProjectsFromSheet, SheetProject } from '../services/sheetService';
 import { fetchAiProjectData } from '../services/aiService';
 
+import { VIETNAM_PROVINCES, STAGES, SECTORS, CAPITAL_TYPES } from '../constants';
+
 const CATEGORY_ICONS: Record<string, any> = {
   FACTORY: Factory,
   BUILDING: Building,
@@ -17,25 +19,9 @@ const CATEGORY_ICONS: Record<string, any> = {
 };
 
 import { db, auth } from '../firebase';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, where, getDocs } from 'firebase/firestore';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error-handler';
-
-const VIETNAM_PROVINCES = [
-  'All', 'An Giang', 'Bà Rịa – Vũng Tàu', 'Bắc Giang', 'Bắc Kạn', 'Bạc Liêu', 'Bắc Ninh', 'Bến Tre', 'Bình Định', 'Bình Dương', 'Bình Phước', 'Bình Thuận', 'Cà Mau', 'Cần Thơ', 'Cao Bằng', 'Đà Nẵng', 'Đắk Lắk', 'Đắk Nông', 'Điện Biên', 'Đồng Nai', 'Đồng Tháp', 'Gia Lai', 'Hà Giang', 'Hà Nam', 'Hà Nội', 'Hà Tĩnh', 'Hải Dương', 'Hải Phòng', 'Hậu Giang', 'Hòa Bình', 'Hưng Yên', 'Khánh Hòa', 'Kiên Giang', 'Kon Tum', 'Lai Châu', 'Lâm Đồng', 'Lạng Sơn', 'Lào Cai', 'Long An', 'Nam Định', 'Nghệ An', 'Ninh Bình', 'Ninh Thuận', 'Phú Thọ', 'Phú Yên', 'Quảng Bình', 'Quảng Nam', 'Quảng Ngãi', 'Quảng Ninh', 'Quảng Trị', 'Sóc Trăng', 'Sơn La', 'Tây Ninh', 'Thái Bình', 'Thái Nguyên', 'Thanh Hóa', 'Thừa Thiên Huế', 'Tiền Giang', 'TP Hồ Chí Minh', 'Trà Vinh', 'Tuyên Quang', 'Vĩnh Long', 'Vĩnh Phúc', 'Yên Bái'
-];
-
-const STAGES = ['All', 'Khởi công', 'Đang thực hiện', 'Hoàn Thành'];
-
-const SECTORS = [
-  'All',
-  'Hạ tầng kỹ thuật (Infrastructure)',
-  'Nông nghiệp & Phát triển nông thôn',
-  'Công nghiệp (Factory/ Industrial)',
-  'Dân dụng (Building/Residential & Commercial)'
-];
-
-const CAPITAL_TYPES = ['All', 'FDI', 'DDI', 'ODA', 'Hỗn hợp'];
 
 export const HomePage = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -54,6 +40,39 @@ export const HomePage = () => {
     capitalType: 'All',
   });
 
+  const handleSearch = async () => {
+    if (!searchTerm.trim()) return;
+    setLoading(true);
+    try {
+      // Query project_real by name
+      // Note: Firestore prefix search is case-sensitive
+      const q = query(
+        collection(db, 'project_real'),
+        where('name', '>=', searchTerm),
+        where('name', '<=', searchTerm + '\uf8ff')
+      );
+      
+      const snapshot = await getDocs(q);
+      if (!snapshot.empty) {
+        const searchResults = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Project[];
+        setProjects(searchResults);
+        setIsFromFirestore(true);
+        setIsFromSheet(false);
+      } else {
+        // If not found in project_real, the existing live filter on 'projects' state 
+        // will still show results if they were already loaded.
+        // We don't want to clear everything if a direct query fails but local filter might work.
+      }
+    } catch (error) {
+      console.error("Search error:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -67,7 +86,7 @@ export const HomePage = () => {
     setLoading(true);
     
     // Try Firestore first
-    const q = query(collection(db, 'projects'), orderBy('name', 'asc'));
+    const q = query(collection(db, 'projects'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       if (!snapshot.empty) {
         const firestoreProjects = snapshot.docs.map(doc => ({
@@ -96,7 +115,18 @@ export const HomePage = () => {
             };
           });
 
-          setProjects(mergedProjects);
+          // Sort by ID descending (100, 99, 98...)
+          const sortedProjects = mergedProjects.sort((a, b) => {
+            const getNum = (id: string) => {
+              const match = id.match(/sheet-(\d+)/);
+              if (match) return parseInt(match[1]);
+              const num = parseInt(id);
+              return isNaN(num) ? 0 : num;
+            };
+            return getNum(b.id) - getNum(a.id);
+          });
+
+          setProjects(sortedProjects);
           setIsFromFirestore(true);
           setIsFromSheet(false);
           setLoading(false);
@@ -159,7 +189,18 @@ export const HomePage = () => {
               ...(realData[p.id] || {})
             }));
 
-            setProjects(mergedProjects);
+            // Sort by ID descending (100, 99, 98...)
+            const sortedProjects = mergedProjects.sort((a, b) => {
+              const getNum = (id: string) => {
+                const match = id.match(/sheet-(\d+)/);
+                if (match) return parseInt(match[1]);
+                const num = parseInt(id);
+                return isNaN(num) ? 0 : num;
+              };
+              return getNum(b.id) - getNum(a.id);
+            });
+
+            setProjects(sortedProjects);
             setIsFromSheet(true);
             setIsFromFirestore(false);
             setLoading(false);
@@ -275,9 +316,13 @@ export const HomePage = () => {
                   className="w-full bg-transparent border-none text-slate-900 placeholder:text-slate-400 py-4 pl-14 pr-6 focus:ring-0 text-lg font-medium"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                 />
               </div>
-              <button className="bg-red-600 text-white hover:bg-red-700 px-10 py-4 rounded-[1.5rem] font-bold text-lg transition-all shadow-lg shadow-red-900/10">
+              <button 
+                onClick={handleSearch}
+                className="bg-red-600 text-white hover:bg-red-700 px-10 py-4 rounded-[1.5rem] font-bold text-lg transition-all shadow-lg shadow-red-900/10"
+              >
                 Tìm kiếm
               </button>
             </motion.div>

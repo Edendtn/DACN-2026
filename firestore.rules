@@ -56,7 +56,7 @@ service cloud.firestore {
       return isAuthenticated() &&
         ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
           get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
-          (request.auth.token.email == "doantrungnghiavt@gmail.com" && request.auth.token.email_verified == true));
+          request.auth.token.email == "doantrungnghiavt@gmail.com");
     }
 
     function isValidEmail(email) {
@@ -64,9 +64,9 @@ service cloud.firestore {
     }
 
     function isValidProject(data) {
-      return data.name is string && data.name.size() > 0 && data.name.size() < 500 &&
-             (data.province == null || data.province is string) &&
-             (data.sector == null || data.sector is string);
+      return data.name is string && data.name.size() > 0 && data.name.size() < 1000 &&
+             (!('province' in data) || data.province == null || data.province is string) &&
+             (!('sector' in data) || data.sector == null || data.sector is string);
     }
 
     function isValidNews(data) {

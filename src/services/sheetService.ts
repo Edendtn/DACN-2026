@@ -1,6 +1,6 @@
 import Papa from 'papaparse';
 
-const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vRz-6AZlmqBfu2ak70GfmpjASXN41l6NEtbIRscw-e5RaVmEWWqTPm8GjNEJ5_txXoom0sBZtfltg49/pub?gid=0&single=true&output=csv';
+const SHEET_URL = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSS4ODpPkjXL3iUrrScrTBFnIu_buufzEiteHSK9VB-4HSmuYNKtJ0LwFAc48Ii18G1tuDnzBzz2POY/pub?output=csv';
 
 export interface SheetProject {
   id: string;
@@ -141,7 +141,7 @@ export const fetchProjectsFromSheet = async (forceRefresh = false): Promise<Shee
             const name = getValue(['name', 'Name', 'Tên dự án', 'Project Name', 'Tên Dự Án', 'Tên', 'Project_Name', 'Project', 'Dự án']) || getByIndex(1);
             
             return {
-              id: getValue(['id', 'ID', 'Mã dự án', 'STT', 'No.', 'Project_ID', 'Mã', 'Code']) || getByIndex(0) || `sheet-${index}`,
+              id: getValue(['id', 'ID', 'Mã dự án', 'STT', 'No.', 'Project_ID', 'Mã', 'Code']) || getByIndex(0) || `${index}`,
               name: name,
               investor: getValue(['investor', 'Investor', 'Chủ đầu tư', 'Chủ Đầu Tư', 'Owner', 'Investor_Name', 'Chủ đầu tư/ Chủ sở hữu']),
               investorAddress: getValue(['investorAddress', 'Địa chỉ chủ đầu tư', 'Investor Address', 'Investor_Address', 'Địa chỉ CĐT']),

@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MapPin, Building2, Calendar, DollarSign, Users, ChevronLeft, Download, Share2, Anchor, Plane, Navigation, Factory, Building, Hotel, GraduationCap, Briefcase, HardHat, Info, UserCircle, Map, ArrowLeft, CheckCircle2, Loader2, Search, Lock, FileText, Eye } from 'lucide-react';
 import { MOCK_PROJECTS } from '../data';
 import { Project } from '../types';
-import { cn } from '../lib/utils';
+import { cn, cleanData } from '../lib/utils';
 import { fetchProjectsFromSheet } from '../services/sheetService';
 import { ProjectSummary } from '../components/ProjectSummary';
 
@@ -128,6 +128,27 @@ export const ProjectDetailPage = () => {
   const fetchAiParties = async (projectName: string, currentProject: Project) => {
     try {
       const updatedProject = await fetchAiProjectData(projectName, currentProject);
+      
+      // If admin, auto-save the AI enhanced data to project_real
+      if (isAdmin && id) {
+        await setDoc(doc(db, 'project_real', id), cleanData(updatedProject), { merge: true });
+        
+        // Also update projects reference
+        const referenceData = {
+          id: updatedProject.id,
+          name: updatedProject.name,
+          investmentCapital: updatedProject.investmentCapital,
+          capitalType: updatedProject.capitalType,
+          province: updatedProject.province,
+          constructionType: updatedProject.constructionType,
+          stage: updatedProject.stage,
+          sector: updatedProject.sector,
+          location: updatedProject.location,
+          updatedAt: serverTimestamp()
+        };
+        await setDoc(doc(db, 'projects', id), cleanData(referenceData), { merge: true });
+      }
+
       setProject(updatedProject);
       setIsReal(true);
       return updatedProject;
@@ -141,7 +162,24 @@ export const ProjectDetailPage = () => {
     if (!editedProject || !id) return;
     setLoading(true);
     try {
-      await setDoc(doc(db, 'project_real', id), editedProject, { merge: true });
+      // 1. Save full data to project_real
+      await setDoc(doc(db, 'project_real', id), cleanData(editedProject), { merge: true });
+      
+      // 2. Update reference fields in projects collection to keep main list in sync
+      const referenceData = {
+        id: editedProject.id,
+        name: editedProject.name,
+        investmentCapital: editedProject.investmentCapital,
+        capitalType: editedProject.capitalType,
+        province: editedProject.province,
+        constructionType: editedProject.constructionType,
+        stage: editedProject.stage,
+        sector: editedProject.sector,
+        location: editedProject.location,
+        updatedAt: serverTimestamp()
+      };
+      await setDoc(doc(db, 'projects', id), cleanData(referenceData), { merge: true });
+
       setProject(editedProject);
       setIsReal(true);
       setIsEditing(false);
@@ -424,12 +462,28 @@ export const ProjectDetailPage = () => {
               </div>
             )}
             {isReal && !isEditing && isAdmin && (
-              <button 
-                onClick={startEditing}
-                className="flex items-center gap-2 bg-blue-600 px-6 py-2.5 rounded-xl text-xs font-bold text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20"
-              >
-                <Briefcase className="w-4 h-4" /> Chỉnh sửa dữ liệu
-              </button>
+              <>
+                <button 
+                  onClick={async () => {
+                    if (project) {
+                      setUpdatingAi(true);
+                      await fetchAiParties(project.name, project);
+                      setUpdatingAi(false);
+                    }
+                  }}
+                  disabled={updatingAi}
+                  className="flex items-center gap-2 bg-purple-600 px-6 py-2.5 rounded-xl text-xs font-bold text-white hover:bg-purple-700 transition-all shadow-lg shadow-purple-900/20 disabled:opacity-50"
+                >
+                  {updatingAi ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                  Cập nhật AI
+                </button>
+                <button 
+                  onClick={startEditing}
+                  className="flex items-center gap-2 bg-blue-600 px-6 py-2.5 rounded-xl text-xs font-bold text-white hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20"
+                >
+                  <Briefcase className="w-4 h-4" /> Chỉnh sửa dữ liệu
+                </button>
+              </>
             )}
             {isEditing && isAdmin && (
               <button 
@@ -516,7 +570,7 @@ export const ProjectDetailPage = () => {
                   {!isReal && isFromFirestore && (
                     <span className="ml-3 text-[9px] font-normal bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full align-middle">Dữ liệu Firestore</span>
                   )}
-                  {project.id.startsWith('sheet-') && (
+                  {!isReal && !isFromFirestore && (
                     <span className="ml-3 text-[9px] font-normal bg-green-100 text-green-800 px-2 py-0.5 rounded-full align-middle">Dữ liệu từ Sheet</span>
                   )}
                 </h1>
@@ -564,24 +618,24 @@ export const ProjectDetailPage = () => {
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 py-6 border-y border-slate-50">
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Vốn đầu tư</p>
-                  <p className="text-lg font-extrabold text-red-600 font-mono">${project.investmentCapital}M</p>
+                  <p className="text-sm font-extrabold text-red-600 font-mono">${project.investmentCapital}M</p>
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Quy mô diện tích</p>
                   <p className={cn(
                     "font-extrabold text-red-600 font-mono leading-tight",
-                    (aiData?.scale || project.scale || '').length > 20 ? "text-sm" : "text-lg"
+                    (aiData?.scale || project.scale || '').length > 20 ? "text-[10px]" : "text-sm"
                   )}>
                     {aiData?.scale || project.scale || '---'}
                   </p>
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Ngày khởi công</p>
-                  <p className="text-lg font-extrabold text-red-600 font-mono">{aiData?.startDate || project.startDate || '---'}</p>
+                  <p className="text-sm font-extrabold text-red-600 font-mono">{aiData?.startDate || project.startDate || '---'}</p>
                 </div>
                 <div>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1">Dự kiến hoàn thành</p>
-                  <p className="text-lg font-extrabold text-red-600 font-mono">{aiData?.completionDate || project.completionDate || '---'}</p>
+                  <p className="text-sm font-extrabold text-red-600 font-mono">{aiData?.completionDate || project.completionDate || '---'}</p>
                 </div>
               </div>
 
